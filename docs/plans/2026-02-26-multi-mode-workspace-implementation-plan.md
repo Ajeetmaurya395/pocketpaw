@@ -1,4 +1,4 @@
-# Multi-Mode Workspace Client — Implementation Plan
+# PocketPaw AI File Explorer — Implementation Plan
 
 **Date:** 2026-02-26
 **Design doc:** `docs/plans/2026-02-26-multi-mode-workspace-client-design.md`
@@ -6,585 +6,764 @@
 
 ---
 
-## Phase 1: Foundation (Tab System + Tiling Layout + Local File Explorer)
+## Phase 1: File Explorer Core
 
-### 1.1 — Install new frontend dependencies
+Goal: Replace the current chat-first layout with a file grid + sidebar layout. Get basic file browsing working with local files.
+
+### 1.1 — Install frontend dependencies
 
 ```bash
-cd client && bun add monaco-editor @xterm/xterm @xterm/addon-fit pdfjs-dist xlsx diff2html marked
+cd client && bun add monaco-editor pdfjs-dist xlsx marked diff2html
 ```
 
-**Files:** `client/package.json`
+**File:** `client/package.json`
 
-### 1.2 — Create `workspaceStore`
+### 1.2 — Rust filesystem commands
 
-New store managing tabs, layout trees, and active state.
+**New file:** `client/src-tauri/src/fs_commands.rs`
 
-**File:** `client/src/lib/stores/workspace.svelte.ts`
+```rust
+use serde::Serialize;
+use std::fs;
+use std::path::Path;
+use std::time::UNIX_EPOCH;
+
+#[derive(Serialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: u64,      // unix timestamp ms
+    pub extension: String,  // lowercase, no dot
+}
+
+#[tauri::command]
+pub async fn fs_read_dir(path: String) -> Result<Vec<FileEntry>, String> { ... }
+
+#[tauri::command]
+pub async fn fs_read_file(path: String) -> Result<Vec<u8>, String> { ... }
+
+#[tauri::command]
+pub async fn fs_read_file_text(path: String) -> Result<String, String> { ... }
+
+#[tauri::command]
+pub async fn fs_write_file(path: String, content: Vec<u8>) -> Result<(), String> { ... }
+
+#[tauri::command]
+pub async fn fs_delete(path: String, recursive: bool) -> Result<(), String> { ... }
+
+#[tauri::command]
+pub async fn fs_rename(old_path: String, new_path: String) -> Result<(), String> { ... }
+
+#[tauri::command]
+pub async fn fs_stat(path: String) -> Result<FileEntry, String> { ... }
+
+#[tauri::command]
+pub async fn fs_create_dir(path: String) -> Result<(), String> { ... }
+
+#[tauri::command]
+pub async fn fs_exists(path: String) -> Result<bool, String> { ... }
+```
+
+**Update:** `client/src-tauri/src/lib.rs` — add `mod fs_commands;` and register all commands in `invoke_handler`.
+
+### 1.3 — Rust filesystem watcher
+
+**New file:** `client/src-tauri/src/fs_watcher.rs`
+
+```rust
+use notify::{Watcher, RecursiveMode, Event};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use tauri::State;
+
+pub struct WatcherState {
+    watchers: Mutex<HashMap<String, notify::RecommendedWatcher>>,
+}
+
+#[tauri::command]
+pub async fn fs_watch(
+    path: String,
+    app: tauri::AppHandle,
+    state: State<'_, WatcherState>
+) -> Result<String, String> { ... }
+// Returns watch_id. Emits "fs-change" event: { watch_id, path, kind }
+
+#[tauri::command]
+pub async fn fs_unwatch(
+    watch_id: String,
+    state: State<'_, WatcherState>
+) -> Result<(), String> { ... }
+```
+
+**Update:** `client/src-tauri/Cargo.toml` — add `notify = "7"`.
+**Update:** `client/src-tauri/src/lib.rs` — add `WatcherState` to managed state.
+
+### 1.4 — FileSystemProvider interface + LocalFileSystem
+
+**New file:** `client/src/lib/filesystem/types.ts`
 
 ```typescript
-// Key types
-interface Tab {
-  id: string
-  type: "chat" | "workspace"
-  title: string
-  sessionId: string
-  layoutTree: LayoutNode | null
-  openFiles: OpenFile[]
-}
-
-interface LayoutNode {
-  id: string
-  type: "split" | "widget" | "tabs"
-  direction?: "horizontal" | "vertical"
-  ratio?: number
-  children?: LayoutNode[]
-  widgetId?: string
-  activeTabIndex?: number  // for "tabs" type
-}
-
-interface OpenFile {
+export interface FileEntry {
+  name: string
   path: string
-  provider: "local" | "remote" | "cloud"
-  isDirty: boolean
+  isDir: boolean
+  size: number
+  modified: number  // unix ms
+  extension: string
+  source: "local" | "remote" | "cloud"
 }
 
-// State
-- tabs: Tab[] (default: one chat tab)
-- activeTabId: string
-- layoutPresets: Record<string, LayoutNode> (built-in presets)
+export interface FileStat { ... }
+export interface FileContent { data: Uint8Array; text?: string }
+export type FileChangeKind = "create" | "modify" | "delete"
+export interface FileChangeEvent { path: string; kind: FileChangeKind }
 
-// Methods
-- addTab(type, title?): string — creates tab, returns id
-- closeTab(id): void — closes tab, handles last-tab
-- switchTab(id): void
-- reorderTabs(fromIdx, toIdx): void
-- convertToWorkspace(tabId): void — chat → workspace with default layout
-- updateLayout(tabId, newTree): void
-- savePreset(name, tree): void
-- loadPreset(name): LayoutNode
-
-// Persistence: save/load to localStorage on change
-```
-
-**Also update:** `client/src/lib/stores/index.ts` to export workspace store.
-
-### 1.3 — Create `TabBar.svelte` component
-
-Horizontal tab bar below the title bar.
-
-**File:** `client/src/lib/components/workspace/TabBar.svelte`
-
-- Renders each tab with icon (💬 or 📁), title, close button
-- "+" button to create new tab
-- Middle-click to close
-- Drag to reorder (use HTML5 drag-and-drop)
-- Active tab highlighted with accent color
-- Tab overflow: horizontal scroll with arrow buttons
-
-### 1.4 — Create `TilingLayout.svelte` (recursive layout renderer)
-
-The core layout engine.
-
-**File:** `client/src/lib/components/workspace/TilingLayout.svelte`
-
-Recursive component that renders `LayoutNode`:
-- `type: "split"` → renders two children with a draggable divider between them
-- `type: "widget"` → renders the widget component from the registry
-- `type: "tabs"` → renders tab headers + the active child widget
-
-**Sub-components:**
-- `client/src/lib/components/workspace/SplitPane.svelte` — two children + resizable divider
-- `client/src/lib/components/workspace/WidgetTabs.svelte` — tab group header + content
-
-**Drag-and-drop zones:** When dragging a widget, each existing panel shows drop zones (left/right/top/bottom edges + center for tabbing). Dropping creates a new split node or adds to tab group.
-
-### 1.5 — Rust filesystem commands
-
-**File:** `client/src-tauri/src/fs_commands.rs`
-
-New Tauri commands:
-```rust
-#[tauri::command]
-async fn fs_read_dir(path: String) -> Result<Vec<FileEntry>, String>
-
-#[tauri::command]
-async fn fs_read_file(path: String) -> Result<Vec<u8>, String>
-
-#[tauri::command]
-async fn fs_write_file(path: String, content: Vec<u8>) -> Result<(), String>
-
-#[tauri::command]
-async fn fs_delete(path: String, recursive: bool) -> Result<(), String>
-
-#[tauri::command]
-async fn fs_rename(old_path: String, new_path: String) -> Result<(), String>
-
-#[tauri::command]
-async fn fs_stat(path: String) -> Result<FileStat, String>
-
-// FileEntry: { name, path, is_dir, size, modified }
-// FileStat: { size, modified, created, is_dir, is_file }
-```
-
-**Also update:** `client/src-tauri/src/lib.rs` to register the new commands in `invoke_handler`.
-**Also update:** `client/src-tauri/Cargo.toml` if any new crates needed (likely just `serde_json` already present).
-
-### 1.6 — Rust filesystem watcher
-
-**File:** `client/src-tauri/src/fs_watcher.rs`
-
-Uses the `notify` crate to watch directories for changes and emit events to the frontend.
-
-```rust
-#[tauri::command]
-async fn fs_watch(path: String, app: tauri::AppHandle) -> Result<String, String>
-// Returns a watch_id. Emits "fs-change" events: { watch_id, path, kind: "create"|"modify"|"delete" }
-
-#[tauri::command]
-async fn fs_unwatch(watch_id: String) -> Result<(), String>
-```
-
-**Update:** `client/src-tauri/Cargo.toml` — add `notify = "7"` dependency.
-
-### 1.7 — `FileSystemProvider` interface + `LocalFileSystem`
-
-**File:** `client/src/lib/filesystem/types.ts`
-```typescript
-interface FileEntry { name: string; path: string; isDir: boolean; size: number; modified: number }
-interface FileStat { size: number; modified: number; created: number; isDir: boolean }
-interface FileContent { data: Uint8Array; encoding?: string }
-type FileChangeKind = "create" | "modify" | "delete"
-interface FileChangeEvent { path: string; kind: FileChangeKind }
-interface Disposable { dispose(): void }
-
-interface FileSystemProvider {
-  scheme: string  // "local", "remote", "cloud"
+export interface FileSystemProvider {
+  scheme: "local" | "remote" | "cloud"
   readDir(path: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
+  readFileText(path: string): Promise<string>
   writeFile(path: string, content: string | Uint8Array): Promise<void>
-  deleteFile(path: string): Promise<void>
+  deleteFile(path: string, recursive?: boolean): Promise<void>
   rename(oldPath: string, newPath: string): Promise<void>
-  stat(path: string): Promise<FileStat>
-  watch(path: string, callback: (event: FileChangeEvent) => void): Disposable
+  stat(path: string): Promise<FileEntry>
+  createDir(path: string): Promise<void>
+  exists(path: string): Promise<boolean>
+  watch(path: string, callback: (event: FileChangeEvent) => void): () => void
 }
 ```
 
-**File:** `client/src/lib/filesystem/local.ts`
-- Implements `FileSystemProvider` using Tauri invoke commands from step 1.5/1.6
+**New file:** `client/src/lib/filesystem/local.ts`
+- Implements `FileSystemProvider` using `invoke("fs_read_dir", ...)` etc.
+- Watch uses Tauri event listener for `fs-change` events.
 
-**File:** `client/src/lib/filesystem/index.ts`
-- Exports `UnifiedFileSystem` that routes `local://`, `remote://`, `cloud://` paths to the right provider
+**New file:** `client/src/lib/filesystem/index.ts`
+- Exports `localFs` singleton + future `remoteFs`, `cloudFs`.
 
-### 1.8 — `FileExplorer.svelte` widget
+### 1.5 — Explorer store
 
-**File:** `client/src/lib/components/workspace/FileExplorer.svelte`
+**New file:** `client/src/lib/stores/explorer.svelte.ts`
 
-- Tree view component with expand/collapse directories
-- Icons for file types (folder, code, image, PDF, etc.)
-- Root nodes: "Local" (from `LocalFileSystem`), "Workspace" (placeholder for phase 5), "Cloud" (placeholder)
-- Single-click to select, double-click to open in editor
-- Right-click context menu (using a `ContextMenu.svelte` component)
-- Search/filter bar at the bottom
-- File watcher integration — auto-refresh when files change
+```typescript
+class ExplorerStore {
+  // State (Svelte 5 runes)
+  currentPath = $state<string>("")         // Current folder path
+  currentSource = $state<"local" | "remote" | "cloud">("local")
+  files = $state<FileEntry[]>([])          // Files in current folder
+  selectedFiles = $state<Set<string>>(new Set())  // Selected file paths
+  viewMode = $state<"icon" | "grid" | "list" | "column" | "gallery">("icon")
+  sortBy = $state<"name" | "modified" | "size" | "type">("name")
+  sortAsc = $state<boolean>(true)
+  isLoading = $state<boolean>(false)
+  error = $state<string | null>(null)
 
-**Sub-component:** `client/src/lib/components/workspace/FileTreeNode.svelte` — recursive tree node
+  // Navigation history
+  history = $state<string[]>([])
+  historyIndex = $state<number>(-1)
 
-### 1.9 — Integrate into existing app layout
+  // Detail view
+  openFile = $state<FileEntry | null>(null)  // Currently opened file (null = browse view)
 
-**Update:** `client/src/lib/components/AppShell.svelte`
-- Add `TabBar` between TitleBar and main content
-- Route tab content: chat tab → existing chat page, workspace tab → `TilingLayout`
+  // Derived
+  sortedFiles = $derived.by(() => { /* sort files by sortBy + sortAsc */ })
+  canGoBack = $derived(this.historyIndex > 0)
+  canGoForward = $derived(this.historyIndex < this.history.length - 1)
+  isDetailView = $derived(this.openFile !== null)
+  breadcrumbs = $derived.by(() => { /* parse currentPath into segments */ })
+
+  // Methods
+  async navigateTo(path: string, source?: string): Promise<void>
+  async refresh(): Promise<void>
+  goBack(): void
+  goForward(): void
+  openFileDetail(file: FileEntry): void
+  closeDetail(): void
+  selectFile(path: string, multi?: boolean): void
+  selectAll(): void
+  clearSelection(): void
+  setViewMode(mode: string): void
+  setSortBy(field: string): void
+}
+
+export const explorerStore = new ExplorerStore()
+```
+
+### 1.6 — ExplorerShell (main layout)
+
+**New file:** `client/src/lib/components/explorer/ExplorerShell.svelte`
+
+The top-level layout component that replaces `AppShell` for the explorer mode:
+
+```svelte
+<div class="explorer-shell">
+  <NavBar />
+  <div class="explorer-body">
+    <div class="file-area">
+      {#if explorerStore.isDetailView}
+        <DetailView />
+      {:else if explorerStore.viewMode === "icon"}
+        <FileGrid size="large" />
+      {:else if explorerStore.viewMode === "grid"}
+        <FileGrid size="small" />
+      {:else if explorerStore.viewMode === "list"}
+        <FileList />
+      {:else if explorerStore.viewMode === "column"}
+        <FileColumn />
+      {:else if explorerStore.viewMode === "gallery"}
+        <FileGallery />
+      {/if}
+    </div>
+    <ChatSidebar />
+  </div>
+</div>
+```
+
+### 1.7 — NavBar
+
+**New file:** `client/src/lib/components/explorer/NavBar.svelte`
+
+```
+┌─[←][→]─[🏠 Home › Documents › Project X]──[🔍]──[Icon ▾]──[⚙]─┐
+```
+
+- Back/forward buttons (linked to explorerStore.goBack/goForward)
+- Breadcrumb path (each segment clickable)
+- Search button (opens SearchOverlay)
+- View mode dropdown selector
+- Settings gear icon
+
+### 1.8 — FileCard + FileGrid
+
+**New file:** `client/src/lib/components/explorer/FileCard.svelte`
+
+Individual file card:
+```svelte
+<button class="file-card" class:selected={isSelected} on:dblclick={openFile}>
+  <div class="thumbnail">
+    <!-- Placeholder colored rectangle with file type icon for now -->
+    <!-- Rust thumbnail generation added in Phase 4 -->
+    <FileTypeIcon extension={file.extension} />
+  </div>
+  <div class="info">
+    <span class="name" title={file.name}>{file.name}</span>
+    <span class="meta">{relativeTime(file.modified)}</span>
+  </div>
+</button>
+```
+
+Props: `file: FileEntry`, `isSelected: boolean`, `size: "large" | "small"`
+Events: `onclick`, `ondblclick`, `oncontextmenu`
+
+**New file:** `client/src/lib/components/explorer/FileGrid.svelte`
+
+Responsive CSS Grid of FileCard components:
+- `size="large"` (Icon view): `grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))`
+- `size="small"` (Grid view): `grid-template-columns: repeat(auto-fill, minmax(110px, 1fr))`
+- Handles click (select), dblclick (open), right-click (context menu), drag (multi-select area)
+
+### 1.9 — ContextMenu
+
+**New file:** `client/src/lib/components/explorer/ContextMenu.svelte`
+
+Floating context menu rendered at cursor position:
+- Open / Open in Detail View
+- Rename (inline rename in the card)
+- Delete (with confirmation)
+- Copy Path
+- Move to...
+- Open in System App
+- "Ask AI about this" (sends to chat)
+
+### 1.10 — Integrate into SvelteKit routes
 
 **Update:** `client/src/routes/+page.svelte`
-- Wrap in tab-aware layout — the current chat becomes the content of the default chat tab
+- Replace current chat-only page with `ExplorerShell`
+- Chat becomes the sidebar (reuse existing `ChatPanel` component inside `ChatSidebar`)
 
-**New route:** `client/src/routes/workspace/+page.svelte`
-- Renders `TilingLayout` for the active workspace tab
+**Update:** `client/src/lib/components/AppShell.svelte`
+- The sidebar navigation (Chat, Settings, Explore, Activity, etc.) moves into a menu accessible from the ⚙ gear or a hamburger menu — no longer a persistent left sidebar
 
-### 1.10 — Mobile responsive foundation
+**New file:** `client/src/lib/components/explorer/ChatSidebar.svelte`
+- Wraps existing chat functionality in a collapsible right sidebar
+- Adds context pill at bottom showing current folder/file
+- Adds drag-drop zone for files
+- Collapse to floating 💬 icon when hidden
 
-**Update:** `client/src/lib/components/workspace/TilingLayout.svelte`
-- `< 640px`: Render only the active leaf node, bottom tab bar to switch
-- `640-1024px`: Render max two panes side-by-side
-- `> 1024px`: Full tiling layout
+### 1.11 — Home view
 
-**New component:** `client/src/lib/components/workspace/MobileZoneSwitcher.svelte`
-- Bottom tab bar for mobile: Files, Editor, Chat, Widgets
-- Swipe gesture support
+**New file:** `client/src/lib/components/explorer/HomeView.svelte`
 
----
-
-## Phase 2: Editor & File Preview
-
-### 2.1 — Monaco Editor widget
-
-**File:** `client/src/lib/components/workspace/MonacoEditor.svelte`
-
-- Wrap `monaco-editor` in a Svelte 5 component
-- Props: `filePath`, `content`, `language`, `readOnly`
-- Events: `onSave`, `onChange`, `onCursorChange`
-- Auto-detect language from file extension
-- Dark mode sync with app theme
-- Minimap, line numbers, word wrap via settings
-
-**File:** `client/src/lib/components/workspace/EditorTabs.svelte`
-- Tab bar for open files (above Monaco)
-- Dirty indicator (dot on unsaved tabs)
-- Close tab, reorder tabs
-- Tab overflow scroll
-
-### 2.2 — File preview renderers
-
-Each renderer is a Svelte component that takes `{ path, content }` props.
-
-**Files:**
-- `client/src/lib/components/workspace/previews/PdfPreview.svelte` — `pdfjs-dist`, page nav, zoom
-- `client/src/lib/components/workspace/previews/ImagePreview.svelte` — `<img>` + pinch-zoom + pan
-- `client/src/lib/components/workspace/previews/SpreadsheetPreview.svelte` — `xlsx` parser + table grid
-- `client/src/lib/components/workspace/previews/MarkdownPreview.svelte` — `marked` rendered + raw toggle
-- `client/src/lib/components/workspace/previews/JsonPreview.svelte` — collapsible tree + raw Monaco
-- `client/src/lib/components/workspace/previews/HtmlPreview.svelte` — sandboxed `<iframe>`
-- `client/src/lib/components/workspace/previews/MediaPreview.svelte` — `<video>` / `<audio>` player
-- `client/src/lib/components/workspace/previews/HexPreview.svelte` — hex dump for binary files
-
-**File:** `client/src/lib/components/workspace/FilePreview.svelte`
-- Dispatcher component: reads file extension → selects the right preview renderer
-- Falls back to Monaco for text, HexPreview for binary
-
-### 2.3 — Diff visualization
-
-**File:** `client/src/lib/components/workspace/DiffView.svelte`
-- Uses `diff2html` to render side-by-side or inline diffs
-- Props: `oldContent`, `newContent`, `filePath`
-- Toggleable: side-by-side vs inline mode
-- Used by Git widget and co-work file edit events
+Shown when `currentPath === ""` (Home):
+- Section: "Pinned Folders" (configured by user, saved to localStorage)
+- Section: "Local" with quick links to Documents, Downloads, Desktop
+- Section: "Workspace" link to agent workspace
+- Section: "Cloud" (placeholder for Phase 5)
+- Each section renders as a row of folder cards
 
 ---
 
-## Phase 3: Widget System
+## Phase 2: Chat Sidebar + Agent Context
 
-### 3.1 — Widget registry
+Goal: Make the AI chat context-aware and show agent file operations in the grid.
 
-**File:** `client/src/lib/widgets/registry.ts`
+### 2.1 — Enhanced ChatSidebar with context
 
-```typescript
-class WidgetRegistry {
-  private widgets = new Map<string, WidgetDefinition>()
+**Update:** `client/src/lib/components/explorer/ChatSidebar.svelte`
 
-  register(widget: WidgetDefinition): void
-  unregister(id: string): void
-  get(id: string): WidgetDefinition | undefined
-  getAll(): WidgetDefinition[]
-  getByCategory(cat: string): WidgetDefinition[]
-}
+- Display `ContextPill` at bottom of chat showing what AI is "looking at"
+- When in browse view: context = current folder path
+- When in detail view: context = open file path
+- When files selected: context = selected file paths
+- Send context with every chat message to backend
 
-// Singleton export
-export const widgetRegistry = new WidgetRegistry()
-```
+**New file:** `client/src/lib/components/explorer/ContextPill.svelte`
+- Renders: `📁 Project X` or `📄 main.py` or `📄 3 files selected`
+- Clickable to change/clear context
 
-**File:** `client/src/lib/widgets/types.ts`
-- `WidgetDefinition` interface (id, name, icon, component, category, canPopOut, etc.)
+### 2.2 — Drag files into chat
 
-**File:** `client/src/lib/widgets/index.ts`
-- Registers all built-in widgets on import
+**Update:** `client/src/lib/components/explorer/ChatSidebar.svelte`
+- Chat input accepts drag-and-drop of FileCard components
+- Dropped files appear as pills above the input: `📄 main.py ✕` `📄 report.pdf ✕`
+- These file paths are sent as explicit context with the message
 
-### 3.2 — Built-in widgets
+**Update:** `client/src/lib/components/explorer/FileCard.svelte`
+- Add `draggable="true"` and `ondragstart` that sets file path data
 
-Each widget is a Svelte component that renders inside the tiling layout.
+### 2.3 — Multiple chat sessions
 
-**Files:**
-- `client/src/lib/widgets/builtin/ChatWidget.svelte` — Reuses existing `ChatPanel` component
-- `client/src/lib/widgets/builtin/ActivityWidget.svelte` — Reuses existing activity log
-- `client/src/lib/widgets/builtin/FileExplorerWidget.svelte` — Wraps `FileExplorer.svelte`
-- `client/src/lib/widgets/builtin/EditorWidget.svelte` — Wraps `EditorTabs` + `MonacoEditor`
-- `client/src/lib/widgets/builtin/PreviewWidget.svelte` — Wraps `FilePreview`
+**Update:** `client/src/lib/stores/chat.svelte.ts`
+- Support multiple independent chat sessions (conversations)
+- `chats: ChatSession[]` each with own message history
+- `activeChatId: string`
 
-### 3.3 — `WidgetHeader.svelte`
+**Update:** `client/src/lib/components/explorer/ChatSidebar.svelte`
+- Dropdown at top to switch between chats
+- "+ New Chat" button
+- Each chat can have different context
 
-**File:** `client/src/lib/components/workspace/WidgetHeader.svelte`
-
-Universal header bar for every widget in the tiling layout:
-- Widget name + icon
-- Pop-out button (opens in separate window)
-- Minimize/collapse toggle
-- Close button (removes from layout)
-- Draggable for repositioning
-
-### 3.4 — Pop-out window support
-
-**File:** `client/src-tauri/src/widget_windows.rs`
-
-Rust commands for managing pop-out widget windows:
-```rust
-#[tauri::command]
-async fn create_widget_window(widget_id: String, title: String, width: f64, height: f64, app: AppHandle) -> Result<(), String>
-
-#[tauri::command]
-async fn close_widget_window(widget_id: String, app: AppHandle) -> Result<(), String>
-```
-
-**New route:** `client/src/routes/widget/[id]/+page.svelte`
-- Renders a single widget by ID in an isolated page (for the pop-out window)
-- Connects to bridge for state sync
-
-**Update:** `client/src/lib/tauri/bridge.ts`
-- Add widget-specific bridge events: `pp:widget-state-sync`, `pp:widget-action`
-
-### 3.5 — Widget store
-
-**File:** `client/src/lib/stores/widget.svelte.ts`
-
-```typescript
-// State
-- poppedOutWidgets: Set<string>  // widget IDs currently in separate windows
-- widgetStates: Map<string, any>  // per-widget persisted state
-
-// Methods
-- popOut(widgetId): void
-- popIn(widgetId): void
-- getWidgetState(id): any
-- setWidgetState(id, state): void
-```
-
----
-
-## Phase 4: Co-work & Terminal
-
-### 4.1 — Terminal PTY backend (Rust)
-
-**File:** `client/src-tauri/src/pty.rs`
-
-Uses `portable-pty` crate (cross-platform PTY):
-```rust
-#[tauri::command]
-async fn pty_spawn(shell: Option<String>, cwd: Option<String>, app: AppHandle) -> Result<String, String>
-// Returns pty_id. Emits "pty-output" events with { pty_id, data: String }
-
-#[tauri::command]
-async fn pty_write(pty_id: String, data: String) -> Result<(), String>
-
-#[tauri::command]
-async fn pty_resize(pty_id: String, cols: u16, rows: u16) -> Result<(), String>
-
-#[tauri::command]
-async fn pty_kill(pty_id: String) -> Result<(), String>
-```
-
-**Update:** `client/src-tauri/Cargo.toml` — add `portable-pty = "0.8"`.
-
-### 4.2 — Terminal widget
-
-**File:** `client/src/lib/widgets/builtin/TerminalWidget.svelte`
-
-- Renders `xterm.js` terminal
-- On mount: calls `pty_spawn`, listens for `pty-output` events
-- On keypress: sends to `pty_write`
-- On resize: calls `pty_resize` with `@xterm/addon-fit`
-- Supports multiple terminal instances (tabs within the widget)
-- Agent output rendered with a distinct left-border color
-
-### 4.3 — Agent file event streaming
+### 2.4 — Agent file events in the grid
 
 **Update:** `client/src/lib/api/websocket.ts`
-- Add handlers for new event types: `file_open`, `file_edit`, `file_create`, `file_delete`, `terminal_output`
+- Listen for new event types: `file_create`, `file_edit`, `file_delete`, `file_move`
 
-**Update:** `client/src/lib/stores/workspace.svelte.ts`
-- On `file_open`: auto-open the file in the editor widget
-- On `file_edit`: update editor content, flash changed lines
-- On `file_create`: refresh file explorer, optionally open
-- On `file_delete`: close editor tab if open, refresh explorer
-- On `terminal_output`: forward to terminal widget
+**Update:** `client/src/lib/stores/explorer.svelte.ts`
+- On `file_create`: add new FileEntry to `files` array, trigger a brief highlight animation on the card
+- On `file_edit`: flash the existing card's thumbnail (CSS animation)
+- On `file_delete`: remove from `files` with a fade-out animation, show undo toast
+- On `file_move`: remove from current view if moved out, add if moved in
+
+**New file:** `client/src/lib/components/explorer/UndoToast.svelte`
+- Bottom-center toast: "Deleted report.pdf [Undo]"
+- Auto-dismiss after 5 seconds
+- Undo restores the file (calls fs_write_file with backed-up content)
+
+### 2.5 — Inline terminal blocks in chat
+
+**Update:** `client/src/lib/components/chat/` (existing chat components)
+- New message type: `terminal_block`
+- Renders as a collapsible dark block with monospace text
+- Shows live output while command is running (streaming)
+- Collapses to single line after completion: `$ npm test — PASS (1.2s) ▾`
+- Click to expand full output
 
 **Backend (Python) changes needed:**
-- **File:** `src/pocketpaw/bus/events.py` — Add `AgentFileEvent` types to `SystemEvent`
-- **File:** `src/pocketpaw/agents/loop.py` — Emit file events when agent uses file tools
-- **File:** `src/pocketpaw/dashboard/websocket.py` — Forward file events to connected clients
+- **Update:** `src/pocketpaw/bus/events.py` — Add file operation fields to `SystemEvent`
+- **Update:** `src/pocketpaw/agents/loop.py` — Emit file events when agent uses file tools
+- **Update:** `src/pocketpaw/dashboard/websocket.py` — Forward file events to clients
 
-### 4.4 — Live cursor presence
+### 2.6 — File action cards in chat
 
-**Update:** `client/src/lib/components/workspace/MonacoEditor.svelte`
-- Add decoration API for remote cursors
-- Listen for `cursor_position` WebSocket events from the agent
-- Render agent cursor as a colored line with a name label
-- User cursor in default color, agent cursor in accent color
+When the agent creates/edits/deletes a file, a compact card appears in the chat:
 
-### 4.5 — Command Palette
+**New file:** `client/src/lib/components/chat/FileActionCard.svelte`
 
-**File:** `client/src/lib/components/workspace/CommandPalette.svelte`
+```
+┌─────────────────────────────┐
+│ ✅ Created summary.md        │  ← Clickable → opens in detail view
+│    📄 2.1 KB · Markdown      │
+└─────────────────────────────┘
 
-- Modal overlay triggered by `Cmd+K` / `Ctrl+K`
-- Search input with fuzzy matching
-- Categorized commands:
-  - **Agent:** "Ask agent to...", "Run tests", "Explain this file", "Fix errors"
-  - **Files:** "Open file", "Search in files", "New file", "Save all"
-  - **Workspace:** "Save layout preset", "Load preset", "Toggle terminal", "Reset layout"
-  - **Navigate:** "Go to line", "Go to file", "Switch tab"
-- Recent commands section
-- Keyboard navigation (arrow keys + enter)
-
-### 4.6 — Destructive action toasts
-
-**File:** `client/src/lib/components/workspace/UndoToast.svelte`
-
-- Appears at bottom-center when agent performs destructive action (delete, overwrite)
-- Shows action description + "Undo" button
-- Auto-dismisses after 5 seconds
-- Undo calls the inverse operation (restore from backup)
-
-**File:** `client/src/lib/stores/undo.svelte.ts`
-- Manages undo stack for destructive file operations
-- Backs up file content before destructive action
+┌─────────────────────────────┐
+│ ✏️ Edited main.py            │  ← Clickable → opens diff view
+│    +12 −3 lines              │
+└─────────────────────────────┘
+```
 
 ---
 
-## Phase 5: Remote Files, Cloud Storage & Polish
+## Phase 3: View Modes + Detail View
+
+Goal: Implement all five view modes and the full file preview/editor system.
+
+### 3.1 — List view
+
+**New file:** `client/src/lib/components/explorer/FileList.svelte`
+
+Table with sortable columns:
+```
+| [✓] | Icon | Name          | Size    | Modified    | Type   |
+|-----|------|---------------|---------|-------------|--------|
+|  □  | 📄   | report.pdf    | 2.4 MB  | 3 min ago   | PDF    |
+|  □  | 🖼️   | hero.png      | 450 KB  | 2 hours ago | Image  |
+```
+
+- Click column header to sort
+- Checkbox for multi-select
+- Row hover highlights
+- Double-click row to open detail view
+
+### 3.2 — Column view
+
+**New file:** `client/src/lib/components/explorer/FileColumn.svelte`
+
+macOS Finder-style cascading columns:
+- Each column shows contents of a directory
+- Clicking a folder opens its contents in the next column
+- Clicking a file shows its preview in the rightmost column
+- Horizontal scroll for deep paths
+- Columns are ~200px wide each
+
+### 3.3 — Gallery view
+
+**New file:** `client/src/lib/components/explorer/FileGallery.svelte`
+
+Full-width cards, one per row:
+```
+┌─────────────────────────────────────────────┐
+│ ┌──────────┐                                │
+│ │          │  report.pdf                    │
+│ │  Large   │  PDF · 12 pages · 2.4 MB      │
+│ │ thumbnail│  Modified 3 minutes ago        │
+│ │          │  [Open] [Ask AI]               │
+│ └──────────┘                                │
+├─────────────────────────────────────────────┤
+│ ┌──────────┐                                │
+│ │          │  hero.png                      │
+│ │  ...     │  PNG · 1920×1080 · 450 KB      │
+│ └──────────┘                                │
+└─────────────────────────────────────────────┘
+```
+
+### 3.4 — Detail view
+
+**New file:** `client/src/lib/components/explorer/DetailView.svelte`
+
+Full-width file preview with header:
+```svelte
+<div class="detail-view">
+  <DetailHeader file={explorerStore.openFile} />
+  <div class="preview-content">
+    <FilePreviewDispatcher file={explorerStore.openFile} />
+  </div>
+</div>
+```
+
+**New file:** `client/src/lib/components/explorer/DetailHeader.svelte`
+- `← Back` button, filename, file metadata, Edit toggle, more menu (···)
+
+**New file:** `client/src/lib/components/explorer/FilePreviewDispatcher.svelte`
+- Reads file extension → selects the right preview component
+- Lazy-loads heavy components (Monaco, pdf.js)
+
+### 3.5 — Preview renderers
+
+**New files** in `client/src/lib/components/explorer/previews/`:
+
+- `CodePreview.svelte` — Monaco Editor wrapper. Props: content, language, readOnly. Handles save (Cmd+S).
+- `PdfPreview.svelte` — `pdfjs-dist` page viewer. Page nav, zoom, fit-to-width.
+- `ImagePreview.svelte` — `<img>` with CSS transform for zoom/pan. Mouse wheel zoom, click+drag pan.
+- `SpreadsheetPreview.svelte` — `xlsx` parse → render as HTML `<table>`. Column headers, row numbers.
+- `MarkdownPreview.svelte` — `marked` render to HTML. Toggle button to switch to raw editor (Monaco).
+- `JsonPreview.svelte` — Collapsible tree view. Toggle to raw editor (Monaco).
+- `HtmlPreview.svelte` — Sandboxed `<iframe>` render. Toggle to source (Monaco).
+- `VideoPreview.svelte` — `<video>` with controls. Supports common formats.
+- `AudioPreview.svelte` — `<audio>` with controls + simple waveform visualization.
+- `TextPreview.svelte` — Monospace text with optional edit mode.
+- `HexPreview.svelte` — Hex dump table (offset | hex bytes | ASCII).
+
+### 3.6 — File navigation in detail view
+
+**Update:** `client/src/lib/components/explorer/DetailView.svelte`
+- Left/Right arrow keys → previous/next file in the current folder
+- Update `explorerStore.openFile` accordingly
+- Smooth transition animation between files
+
+---
+
+## Phase 4: Thumbnails + Search
+
+Goal: Rich visual thumbnails for all file types and powerful search.
+
+### 4.1 — Rust thumbnail generation
+
+**New file:** `client/src-tauri/src/thumbnail.rs`
+
+```rust
+use image::DynamicImage;
+use std::path::Path;
+
+const CACHE_DIR: &str = ".pocketpaw/cache/thumbnails";
+
+#[tauri::command]
+pub async fn generate_thumbnail(
+    path: String,
+    width: u32,
+    height: u32
+) -> Result<String, String> {
+    // Returns base64 PNG string (or file:// URL to cached thumbnail)
+    // 1. Check cache (keyed by path + modified timestamp)
+    // 2. Generate based on file type
+    // 3. Cache result
+    // 4. Return
+}
+
+#[tauri::command]
+pub async fn generate_thumbnails_batch(
+    entries: Vec<ThumbnailRequest>,
+    width: u32,
+    height: u32
+) -> Result<Vec<ThumbnailResult>, String> {
+    // Parallel batch generation using tokio::spawn
+}
+```
+
+**Dependencies to add to Cargo.toml:**
+- `image = "0.25"` — Image resizing
+- `syntect = "5"` — Code syntax highlighting for code thumbnails
+
+For PDFs: use `mupdf-rs` or shell out to a PDF renderer.
+For video: shell out to `ffmpeg` (if available) to extract first frame.
+
+### 4.2 — Thumbnail integration in FileCard
+
+**Update:** `client/src/lib/components/explorer/FileCard.svelte`
+- On mount: call `generate_thumbnail` for the file
+- Show placeholder (colored bg + file icon) while loading
+- Fade in the real thumbnail when ready
+- Cache thumbnail URLs in an in-memory map to avoid re-generating
+
+**Update:** `client/src/lib/components/explorer/FileGrid.svelte`
+- Use `IntersectionObserver` for lazy loading — only generate thumbnails for visible cards
+- Batch thumbnail requests for visible cards
+
+### 4.3 — Search overlay
+
+**New file:** `client/src/lib/components/explorer/SearchOverlay.svelte`
+
+Modal overlay (Cmd+K or 🔍 button):
+- Search input with instant results
+- Three tabs: "Files" (filename match), "Content" (full-text), "AI" (natural language)
+- Results show: file icon, name, path, match preview snippet
+- Click result → navigate to file
+- Enter on first result → open it
+
+### 4.4 — Full-text search (Rust)
+
+**New file:** `client/src-tauri/src/search.rs`
+
+```rust
+#[tauri::command]
+pub async fn search_files(
+    root: String,
+    query: String,
+    max_results: u32
+) -> Result<Vec<SearchResult>, String> {
+    // Walk directory tree, search file contents
+    // Use ripgrep-style matching for speed
+    // Return file path + matching line + context
+}
+```
+
+For AI-powered search: route the query through the chat backend and return file paths from the agent's response.
+
+### 4.5 — Spacebar quick peek
+
+**New file:** `client/src/lib/components/explorer/QuickPeek.svelte`
+
+Modal overlay that appears when pressing Spacebar with a file selected:
+- Centered modal with file preview (uses same preview renderers)
+- Press Spacebar again or Esc to close
+- Press Enter to open in full detail view
+- Smaller than full detail view (~70% of screen)
+
+---
+
+## Phase 5: Remote Files + Cloud Storage
+
+Goal: Connect agent workspace and cloud storage providers.
 
 ### 5.1 — Remote filesystem provider
 
-**File:** `client/src/lib/filesystem/remote.ts`
-- Implements `FileSystemProvider` using REST API calls
-- Endpoints: `GET /api/v1/workspace/files`, `GET/PUT/DELETE /api/v1/workspace/files/{path}`
-- WebSocket-based watch (listens for agent file events)
+**New file:** `client/src/lib/filesystem/remote.ts`
 
-**Backend (Python):**
+Implements `FileSystemProvider` using REST API:
+- `readDir` → `GET /api/v1/workspace/files?path=...`
+- `readFile` → `GET /api/v1/workspace/files/content?path=...`
+- `writeFile` → `PUT /api/v1/workspace/files/content?path=...`
+- `deleteFile` → `DELETE /api/v1/workspace/files?path=...`
+- `watch` → Listen for WebSocket file events from agent
+
+**Backend (Python) — new endpoints:**
 - **New file:** `src/pocketpaw/dashboard/routes/workspace.py`
-  - `GET /api/v1/workspace/files` — list files in agent workspace
-  - `GET /api/v1/workspace/files/{path}` — read file
-  - `PUT /api/v1/workspace/files/{path}` — write file
-  - `DELETE /api/v1/workspace/files/{path}` — delete file
+  - File CRUD endpoints for `~/.pocketpaw/workspace/`
+  - Serve file content with proper MIME types
+  - Generate thumbnails for remote files
 
-### 5.2 — Cloud storage providers
+### 5.2 — Cloud providers
 
-**File:** `client/src/lib/filesystem/cloud/google-drive.ts`
-- Implements `FileSystemProvider` for Google Drive
+**New file:** `client/src/lib/filesystem/cloud/types.ts`
+- `CloudAccount` interface: id, provider, name, accessToken, refreshToken
+
+**New file:** `client/src/lib/filesystem/cloud/google-drive.ts`
+- `GoogleDriveProvider implements FileSystemProvider`
 - Uses Google Drive REST API v3
-- OAuth handled by existing auth system
+- OAuth token from settings
 
-**File:** `client/src/lib/filesystem/cloud/dropbox.ts`
-- Implements `FileSystemProvider` for Dropbox
-- Uses Dropbox HTTP API
+**New file:** `client/src/lib/filesystem/cloud/dropbox.ts`
+- `DropboxProvider implements FileSystemProvider`
 
-**File:** `client/src/lib/filesystem/cloud/s3.ts`
-- Implements `FileSystemProvider` for S3-compatible storage
-- Configurable endpoint for R2, MinIO, etc.
+**New file:** `client/src/lib/filesystem/cloud/s3.ts`
+- `S3Provider implements FileSystemProvider`
+- Configurable endpoint (supports R2, MinIO, etc.)
 
-**Update:** Settings page to configure cloud storage accounts.
+### 5.3 — Cloud settings UI
 
-### 5.3 — Layout presets
+**New file:** `client/src/lib/components/explorer/CloudSettings.svelte`
+- Add/remove cloud accounts
+- Configure S3 endpoints
+- OAuth flows for Google Drive and Dropbox
+- Test connection button
 
-**Update:** `client/src/lib/stores/workspace.svelte.ts`
-- Built-in presets: "Coding" (default), "Review" (editor + diff + git), "Research" (chat + file explorer), "Minimal" (just chat)
-- Custom presets saved to localStorage
-- Preset switcher in tab bar or command palette
+### 5.4 — Update Home view
 
-### 5.4 — Mobile responsive polish
-
-**Update:** All workspace components for responsive breakpoints
-- `TilingLayout.svelte`: Responsive rendering (single/dual/full)
-- `MobileZoneSwitcher.svelte`: Bottom nav + swipe gestures
-- `TabBar.svelte`: Scrollable on mobile, compact mode
-- `CommandPalette.svelte`: Full-screen on mobile
-- Touch-friendly: larger hit targets, swipe to close panels
+**Update:** `client/src/lib/components/explorer/HomeView.svelte`
+- Show cloud providers as source sections
+- Connected accounts show their root folders
+- Quick setup cards for unconfigured providers
 
 ---
 
-## Phase 6: Extensions & Git
+## Phase 6: Polish + Mobile
 
-### 6.1 — Git widget
+Goal: Animations, mobile adaptation, keyboard shortcuts, final polish.
 
-**File:** `client/src/lib/widgets/builtin/GitWidget.svelte`
+### 6.1 — File animations
 
-- Shows current branch, status (modified/staged/untracked files)
-- Inline diff viewer for each changed file
-- Stage/unstage, commit (with message input), push/pull buttons
-- Branch switcher dropdown
-- Uses Tauri commands that shell out to `git` CLI
+**Update:** `client/src/lib/components/explorer/FileGrid.svelte` and `FileCard.svelte`
+- New file created by agent: card fades in with a subtle scale animation
+- File deleted: card fades out + shrinks
+- File moved: card slides out of old position
+- File edited: thumbnail briefly pulses/glows
 
-**File:** `client/src-tauri/src/git_commands.rs`
-```rust
-#[tauri::command]
-async fn git_status(cwd: String) -> Result<GitStatus, String>
+Use Svelte transitions: `transition:fly`, `transition:fade`, `transition:scale`.
 
-#[tauri::command]
-async fn git_diff(cwd: String, path: Option<String>) -> Result<String, String>
+### 6.2 — Mobile responsive
 
-#[tauri::command]
-async fn git_stage(cwd: String, paths: Vec<String>) -> Result<(), String>
+**Update:** `client/src/lib/components/explorer/ExplorerShell.svelte`
+- `< 640px`: Hide chat sidebar, show 💬 floating button
+- 💬 button opens `ChatBottomSheet.svelte` (slides up from bottom, 70% height)
+- File grid: 2 columns on phone
+- NavBar: compact mode (hamburger menu for breadcrumbs)
 
-#[tauri::command]
-async fn git_commit(cwd: String, message: String) -> Result<(), String>
+**New file:** `client/src/lib/components/explorer/ChatBottomSheet.svelte`
+- Bottom sheet overlay with drag handle
+- Contains full chat functionality
+- Swipe down to dismiss
 
-#[tauri::command]
-async fn git_log(cwd: String, limit: u32) -> Result<Vec<GitLogEntry>, String>
+**Update:** `client/src/lib/components/explorer/DetailView.svelte`
+- Full screen on mobile
+- Swipe right to go back to grid
+- Chat accessible via floating 💬 button
 
-#[tauri::command]
-async fn git_branches(cwd: String) -> Result<Vec<String>, String>
+### 6.3 — Keyboard shortcuts
 
-#[tauri::command]
-async fn git_checkout(cwd: String, branch: String) -> Result<(), String>
-```
+**Update:** Various components
 
-### 6.2 — MCP tool widget auto-registration
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+K` / `Ctrl+K` | Open search overlay |
+| `Spacebar` | Quick peek selected file |
+| `Enter` | Open selected file in detail view |
+| `Esc` | Close detail view / search / quick peek |
+| `Backspace` | Go back (detail → browse, or navigate up) |
+| `←` `→` | Previous/next file in detail view |
+| `Cmd+1-5` | Switch view mode (Icon/Grid/List/Column/Gallery) |
+| `Cmd+A` | Select all files |
+| `Delete` | Delete selected files |
+| `Cmd+N` | New chat |
+| `Cmd+/` | Toggle chat sidebar |
 
-**Update:** `client/src/lib/widgets/registry.ts`
-- When MCP servers connect and report tools with UI capabilities, auto-register a generic widget that renders tool output
-- Listen for `mcp_connected` / `mcp_disconnected` events
+### 6.4 — Pinned folders
 
-**File:** `client/src/lib/widgets/mcp/McpToolWidget.svelte`
-- Generic widget that can invoke an MCP tool and display its output
-- Input form auto-generated from tool schema
-- Output rendered as formatted JSON, text, or custom component
+**Update:** `client/src/lib/stores/explorer.svelte.ts`
+- `pinnedFolders: PinnedFolder[]` saved to localStorage
+- Methods: `pinFolder(path, source)`, `unpinFolder(path)`, `reorderPins(...)`
 
-### 6.3 — Skill widget support
+**Update:** `client/src/lib/components/explorer/HomeView.svelte`
+- Drag folders to the "Pinned" section
+- Right-click → "Pin to Home"
+- Reorder pinned folders by drag
 
-**Update:** `client/src/lib/widgets/registry.ts`
-- Skills can declare a `widget` field in their manifest
-- On skill install, register the widget component
-- Widget component loaded dynamically via dynamic import
+### 6.5 — Version history (stretch goal)
+
+**New file:** `client/src/lib/components/explorer/VersionHistory.svelte`
+- Track file versions when the agent edits files
+- Accessible from detail view → More menu → "Version History"
+- Shows list of versions with timestamps and diffs
+- Click to preview old version, button to restore
 
 ---
 
 ## Dependency Graph
 
 ```
-Phase 1.1 (deps) ──┐
-Phase 1.2 (store) ──┤
-Phase 1.5 (rust fs)─┼──→ Phase 1.7 (fs provider) ──→ Phase 1.8 (explorer)
-Phase 1.6 (watcher)─┘                                       │
-Phase 1.3 (tab bar) ────────────────────────────────────────┤
-Phase 1.4 (tiling) ─────────────────────────────────────────┼──→ Phase 1.9 (integrate)
-                                                             │         │
-Phase 2.1 (monaco) ──→ Phase 2.2 (previews) ──→ Phase 2.3 (diff)     │
-                                                                       │
-Phase 3.1 (registry) ──→ Phase 3.2 (builtins) ──→ Phase 3.3 (header)──┘
-Phase 3.4 (pop-out) ──→ Phase 3.5 (widget store)
+1.1 (deps) ─────────────────────────────────────────┐
+1.2 (rust fs) ──┐                                    │
+1.3 (watcher) ──┼→ 1.4 (fs provider) → 1.5 (store) ─┼→ 1.6 (shell)
+                │                                     │     │
+                │   1.7 (navbar) ─────────────────────┘     │
+                │   1.8 (file card + grid) ─────────────────┤
+                │   1.9 (context menu) ─────────────────────┤
+                │                                           │
+                │                              1.10 (routes) ← 1.11 (home)
+                │
+                ├→ 2.1 (chat context) → 2.2 (drag files)
+                ├→ 2.3 (multi chat)
+                ├→ 2.4 (agent file events) → 2.5 (terminal blocks)
+                └→ 2.6 (file action cards)
 
-Phase 4.1 (pty rust) ──→ Phase 4.2 (terminal widget)
-Phase 4.3 (file events) ──→ Phase 4.4 (cursors)
-Phase 4.5 (cmd palette)
-Phase 4.6 (undo toasts)
+3.1 (list view)
+3.2 (column view)     ─→ all independent, can be parallel
+3.3 (gallery view)
+3.4 (detail view) → 3.5 (preview renderers) → 3.6 (file nav)
 
-Phase 5.1 (remote fs)
-Phase 5.2 (cloud)
-Phase 5.3 (presets)
-Phase 5.4 (mobile)
+4.1 (rust thumbnails) → 4.2 (thumbnail in cards)
+4.3 (search overlay) → 4.4 (full-text search)
+4.5 (quick peek)
 
-Phase 6.1 (git widget)
-Phase 6.2 (mcp widgets)
-Phase 6.3 (skill widgets)
+5.1 (remote fs) → backend Python changes
+5.2 (cloud providers)
+5.3 (cloud settings)
+5.4 (home view update)
+
+6.1 (animations)
+6.2 (mobile)
+6.3 (keyboard shortcuts)
+6.4 (pinned folders)
+6.5 (version history)
 ```
 
 ## File Count Summary
 
 | Category | New Files | Modified Files |
 |----------|-----------|----------------|
-| Rust (src-tauri) | 5 | 2 (lib.rs, Cargo.toml) |
-| Stores | 3 | 1 (index.ts) |
-| Workspace components | 12 | 2 (AppShell, +page) |
-| Preview components | 8 | 0 |
-| Widget system | 10 | 1 (bridge.ts) |
-| Filesystem | 6 | 0 |
-| Backend (Python) | 3 | 3 |
-| Routes | 2 | 1 |
-| **Total** | **~49 new** | **~10 modified** |
+| Rust (src-tauri) | 4 (fs_commands, fs_watcher, thumbnail, search) | 2 (lib.rs, Cargo.toml) |
+| Filesystem TS | 6 (types, local, remote, index, cloud/*) | 0 |
+| Stores | 1 (explorer.svelte.ts) | 2 (chat, index) |
+| Explorer components | 18 (shell, navbar, grid, card, list, column, gallery, detail, chat sidebar, context pill, context menu, search, quick peek, home, bottom sheet, undo toast, file action card, cloud settings) | 2 (AppShell, +page) |
+| Preview components | 11 (dispatcher + 10 renderers) | 0 |
+| Backend (Python) | 1 (workspace routes) | 3 (events, loop, websocket) |
+| **Total** | **~41 new** | **~9 modified** |

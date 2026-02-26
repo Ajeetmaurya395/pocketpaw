@@ -1,98 +1,256 @@
-# Multi-Mode Workspace Desktop Client Design
+# PocketPaw AI File Explorer — Design
 
 **Date:** 2026-02-26
-**Status:** Approved
+**Status:** Approved (v2 — revised from IDE-first to file-explorer-first)
 **Scope:** PocketPaw desktop client (`client/`) — Tauri 2.0 + SvelteKit 2 + Svelte 5
 
 ## Overview
 
-Transform the PocketPaw desktop client from a chat-first app into a full workspace IDE with multiple modes, a tiling layout engine, pluggable widgets, real-time agent collaboration, unified file management, and responsive mobile support.
+The PocketPaw desktop client is an **AI-powered file explorer** — like Finder or Windows Explorer, but with a conversational AI sidebar that understands your files. The file grid is the primary interface. The AI chat is always present but secondary. Inspired by [Poly.app](https://poly.app/).
 
-## Architecture Decision
+This is NOT an IDE. There are no tiling layouts, no widget panels, no terminal docks. The app is a file browser with rich previews, multiple view modes, and an AI agent that can read, create, edit, and organize your files through natural conversation.
 
-**Hybrid SPA + Pop-out:** Core workspace is a SvelteKit SPA within the existing Tauri app. Any widget panel can be popped out into a separate Tauri webview window. State sync between main window and popped-out windows uses the existing `bridge.ts` cross-window event system.
+## 1. Architecture
 
-## 1. Workspace Tab System
+**SPA within Tauri.** The entire app is a single SvelteKit route with two visual states:
 
-Horizontal tab bar below the title bar. Each tab is an independent workspace.
+1. **Browse view** — file grid + AI chat sidebar (the default, 90% of the time)
+2. **Detail view** — full file preview/editor + AI chat sidebar (when a file is opened)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  [←][→]  PocketPaw           ─ □ ✕                      │  Title bar
-├─────────────────────────────────────────────────────────┤
-│  [+ New] [💬 Chat] [📁 Project X] [📁 Debug logs]  ... │  Tab bar
-├─────────────────────────────────────────────────────────┤
-│              (Tab content here)                          │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Tab Types
-
-- **Chat tab** — Full-width chat interface (existing UI, enhanced). Default tab on launch.
-- **Workspace tab** — Tiling layout with file explorer, editor/preview, and draggable widgets.
-
-### Tab State (`workspaceStore`)
-
-```typescript
-interface Tab {
-  id: string
-  type: "chat" | "workspace"
-  title: string
-  sessionId: string          // Links to backend session
-  layoutTree?: LayoutNode    // Workspace layout (null for chat tabs)
-  openFiles?: string[]       // Open file tabs in editor
-}
-```
-
-### Tab Behavior
-
-- New tab defaults to Chat mode. "Switch to Workspace" button or automatic transition when agent starts file operations.
-- Tabs persist across sessions (saved to local storage).
-- Close with middle-click or X button. Last tab creates a new empty one.
-- Drag to reorder.
-
-## 2. Workspace Mode Layout
-
-Tiling layout engine where widgets can be placed anywhere.
-
-### Layout Tree
-
-```typescript
-interface LayoutNode {
-  type: "split" | "widget" | "tabs"
-  direction?: "horizontal" | "vertical"  // for "split"
-  ratio?: number                          // split ratio (0-1)
-  children?: LayoutNode[]                 // for "split" and "tabs"
-  widgetId?: string                       // for "widget" leaf nodes
-}
-```
-
-### Default Layout Preset ("Coding")
+Switching between them is a navigation within the same page — `← Back` returns to browse. No separate routes, no tab system.
 
 ```
-┌──────────┬────────────────────────┬──────────┐
-│          │                        │  Chat    │
-│  Files   │     Editor (tabs)      │──────────│
-│          │                        │ Terminal  │
-│          ├────────────────────────│──────────│
-│          │     Diff / Preview     │ Activity  │
-└──────────┴────────────────────────┴──────────┘
+┌──────────────────────────────────────────────┬──────────────────┐
+│              FILE AREA (~70-75%)              │  CHAT (~25-30%)  │
+│                                              │                  │
+│  Browse: file grid with thumbnails           │  AI conversation │
+│    — or —                                    │  with context     │
+│  Detail: full file preview/editor            │  awareness        │
+│                                              │                  │
+└──────────────────────────────────────────────┴──────────────────┘
 ```
 
-### Layout Features
+The chat sidebar is collapsible. When collapsed, a small chat icon floats at the bottom-right.
 
-- Drag a widget to create a new split (left, right, top, bottom of any existing panel)
-- Drop a widget onto another to create a tabbed group
-- Resize any split boundary by dragging dividers
-- Double-click divider to reset to default ratio
-- Save/load layout presets (e.g., "Coding", "Review", "Research")
+## 2. Browse View (File Grid)
 
-## 3. File System Provider
+The primary screen. Shows files in the current folder as visual cards with rich thumbnails.
 
-Unified abstraction for local, remote, and cloud files.
+### Navigation Bar
+
+```
+🏠 Home › Local › Documents › Project X    🔍    [Icon ▾]
+```
+
+- **Breadcrumb path:** Clickable segments. 🏠 Home shows the root with pinned folders from all sources.
+- **Search:** Opens a search overlay — semantic search powered by the AI (not just filename matching).
+- **View mode selector:** Dropdown to switch between Icon, Grid, List, Column, Gallery.
+
+### File Cards
+
+Each file renders as a card with:
+- **Thumbnail:** Visual preview generated by Tauri backend
+  - PDFs → first page render
+  - Images → scaled thumbnail
+  - Code → syntax-highlighted snippet (first ~10 lines)
+  - Spreadsheets → mini table preview
+  - Text/Markdown → formatted text excerpt
+  - Video → first frame
+  - Audio → waveform visualization
+  - URLs/bookmarks → website screenshot or favicon
+  - Folders → mini grid of contained file thumbnails
+  - Unknown → file type icon
+- **Filename:** Truncated with ellipsis if long
+- **Source badge:** Small icon showing Local/Workspace/Cloud origin
+- **Timestamp:** Relative ("3 min ago", "2 days ago")
+- **Selection:** Click to select, Cmd/Ctrl+click for multi-select, drag to area-select
+
+### View Modes
+
+**Icon view** (default — matches the Poly screenshot):
+- Large thumbnail cards (~150px wide) in a responsive grid
+- 4-6 columns depending on window width
+- Card: thumbnail on top, name + metadata below
+
+**Grid view:**
+- Smaller thumbnails (~100px), more files visible
+- 6-10 columns, compact spacing
+- Name below, no metadata
+
+**List view:**
+- Table rows: [icon] [name] [size] [modified] [type] [source]
+- Sortable columns (click header to sort)
+- Small inline thumbnail on hover
+
+**Column view:**
+- macOS Finder-style: cascading columns from left to right
+- Click a folder → its contents appear in the next column
+- Great for deep folder navigation
+
+**Gallery view:**
+- Full-width preview cards, one per row
+- Large thumbnails with file details on the right
+- Best for media review and presentations
+
+### File Actions
+
+- **Double-click:** Open in Detail view
+- **Right-click:** Context menu — Open, Preview, Rename, Delete, Move, Copy Path, Share, Open in System App, "Ask AI about this file"
+- **Drag:** Drag files to chat sidebar to add as context, or drag to reorganize
+- **Spacebar:** Quick peek (modal preview overlay without leaving browse view)
+- **Multi-select + right-click:** Batch operations — "Ask AI about these files", Delete, Move, etc.
+
+### Folder Sources (Home view)
+
+```
+🏠 Home
+├── 📌 Pinned Folders
+│   ├── 📁 My Project (local)
+│   ├── 📁 Agent Workspace (remote)
+│   └── ☁️ Design Assets (Google Drive)
+├── 💻 Local
+│   ├── 📁 Documents
+│   ├── 📁 Downloads
+│   ├── 📁 Desktop
+│   └── 📁 ...
+├── 🤖 Workspace (agent files at ~/.pocketpaw/workspace/)
+└── ☁️ Cloud (configured providers)
+    ├── Google Drive
+    ├── Dropbox
+    └── S3 bucket
+```
+
+## 3. Detail View (File Preview/Editor)
+
+When a file is opened, the file area transitions to a full preview. The chat sidebar stays.
+
+### Header
+
+```
+← Back    report.pdf    📄 12 pages · 2.4 MB · Modified 3 min ago    [Edit] [···]
+```
+
+- **← Back:** Returns to browse view (or keyboard: Esc, Backspace)
+- **File info:** Name, type-specific metadata, size, last modified
+- **Edit button:** Switches to edit mode (for editable files)
+- **More menu (···):** Rename, Delete, Move, Open in System App, Download, Share, Version History
+
+### Preview Renderers
+
+| File Type | Renderer | Editable |
+|-----------|----------|----------|
+| Code (.py, .ts, .rs, etc.) | Monaco Editor with syntax highlighting | Yes |
+| PDF | Page viewer with navigation, zoom, search | No |
+| Excel/CSV | Table grid with column headers | Read-only (v1) |
+| Images (.png, .jpg, .svg) | Zoomable/pannable viewer | No |
+| Markdown (.md) | Rendered HTML (toggle to raw editor) | Yes |
+| JSON | Collapsible tree viewer (toggle to raw editor) | Yes |
+| HTML | Rendered in sandboxed iframe (toggle to source) | Yes (source) |
+| Video | Native player with controls | No |
+| Audio | Waveform player | No |
+| Text | Monospace viewer/editor | Yes |
+| Unknown/Binary | Hex dump + file info | No |
+
+### Navigation Between Files
+
+- **Arrow keys:** Previous/next file in the folder (when in detail view)
+- **Keyboard shortcuts:** `Cmd+S` save, `Cmd+E` toggle edit, `Esc` back to browse
+
+## 4. AI Chat Sidebar
+
+The right sidebar (~300-340px, resizable, collapsible).
+
+### Layout
+
+```
+┌──────────────────┐
+│ Chat 1 ▾  + New  │  ← Chat session selector + new chat
+├──────────────────┤
+│                  │
+│  🟠 User message │
+│                  │
+│  🤖 AI response  │
+│  with formatted  │
+│  markdown, code  │
+│  blocks, etc.    │
+│                  │
+│  ┌──────────────┐│
+│  │ Terminal      ││  ← Collapsible inline terminal block
+│  │ $ npm test   ││    (for agent command output)
+│  │ PASS 3/3     ││
+│  └──────────────┘│
+│                  │
+│  🟠 Another msg  │
+│                  │
+├──────────────────┤
+│ [Chat or drag    │  ← Input area
+│  files here...]  │
+│                  │
+│ ■ Stop           │  ← Stop button (when streaming)
+│ 📁 Project X     │  ← Context indicator
+└──────────────────┘
+```
+
+### Context Awareness
+
+The chat always knows what you're looking at:
+
+- **In browse view:** Context = current folder. Pill shows `📁 folder name`.
+- **In detail view:** Context = open file. Pill shows `📄 filename`.
+- **With selection:** If files are selected, context = selection. Pill shows `📄 3 files selected`.
+- **Dragged files:** Drag files into chat input → they become explicit context. Shows as pills in the input.
+
+The AI can reference any file in the current context without the user having to paste content.
+
+### Chat Features
+
+- **Multiple conversations:** Dropdown at top to switch. Each has independent history.
+- **Streaming responses:** Token-by-token streaming with a stop button.
+- **Rich responses:** Markdown, code blocks with syntax highlighting, inline images, file references (clickable → opens detail view).
+- **Inline terminal blocks:** When the agent runs commands, output appears as collapsible blocks within the chat (not a separate terminal panel).
+- **File action indicators:** When the agent creates/edits/deletes files, a small action card appears in the chat: "Created `summary.md`" (clickable), "Edited `main.py` (+5 −2 lines)" (clickable to see diff).
+- **Drag-and-drop:** Drag files from the grid into the chat to add as context.
+
+### Agent Co-work Capabilities
+
+The agent works through the chat. Its actions are reflected in the file explorer in real-time:
+
+| User says | Agent does | UI effect |
+|-----------|-----------|-----------|
+| "Create a Python script that..." | Creates file | New file appears in grid with thumbnail |
+| "Edit main.py and fix the bug" | Edits file | File thumbnail flashes, chat shows diff card |
+| "Run the tests" | Runs command | Inline terminal block appears in chat |
+| "Organize these files into folders" | Creates folders, moves files | Grid animates: files slide into new folders |
+| "Summarize all PDFs" | Reads files | Chat shows summary with citations |
+| "Convert report.pdf to markdown" | Creates new file | New .md file appears in grid |
+| "Delete the temp files" | Deletes files | Files fade out of grid, toast with "Undo" |
+
+### Inline Terminal
+
+Command output is NOT a separate panel. It appears as collapsible blocks within the chat conversation:
+
+```
+🤖 Running your tests...
+
+┌─ Terminal ─────────────────────────┐
+│ $ cd /project && npm test          │
+│ PASS  tests/auth.test.ts (1.2s)   │
+│ PASS  tests/api.test.ts (0.8s)    │
+│ Tests: 2 passed, 2 total          │
+└────────────────────────────────────┘
+
+All tests passing. The auth module looks good.
+```
+
+Collapsed by default after completion. Click to expand. While running, shows live output.
+
+## 5. File System Provider
+
+Same unified abstraction as before — this part doesn't change.
 
 ```typescript
 interface FileSystemProvider {
+  scheme: string  // "local", "remote", "cloud"
   readDir(path: string): Promise<FileEntry[]>
   readFile(path: string): Promise<FileContent>
   writeFile(path: string, content: string | Uint8Array): Promise<void>
@@ -103,253 +261,198 @@ interface FileSystemProvider {
 }
 ```
 
-### Implementations
+**Three implementations:**
+1. **`LocalFileSystem`** — Tauri Rust commands for local machine files
+2. **`RemoteFileSystem`** — REST API to PocketPaw backend (agent workspace)
+3. **`CloudFileSystem`** — Google Drive, Dropbox, S3 (added incrementally)
 
-1. **`LocalFileSystem`** — Tauri Rust commands (`fs_read_dir`, `fs_read_file`, `fs_write_file`, `fs_delete`, `fs_rename`, `fs_stat`, `fs_watch`). Uses Rust `notify` crate for filesystem events. Scoped to user-approved directories via Tauri's `fs` plugin.
+## 6. Thumbnail Generation
 
-2. **`RemoteFileSystem`** — REST API calls to PocketPaw backend. Agent workspace files in `~/.pocketpaw/workspace/`.
+Rich thumbnails are core to the file explorer experience. Generated on the Rust side for performance.
 
-3. **`CloudFileSystem`** — Cloud storage APIs:
-   - Google Drive (OAuth)
-   - Dropbox (API)
-   - S3/R2 (AWS SDK compatible)
-   - Configured in Settings. Each provider implements `FileSystemProvider`.
+### Tauri Thumbnail Commands
 
-### File Explorer
+```rust
+#[tauri::command]
+async fn generate_thumbnail(path: String, width: u32, height: u32) -> Result<Vec<u8>, String>
+// Returns PNG bytes. Caches thumbnails in ~/.pocketpaw/cache/thumbnails/
 
-- Tree view with root nodes: "Local", "Workspace" (remote), "Cloud"
-- Path prefixes: `local://`, `remote://`, `cloud://<provider>/`
-- Right-click context menu: Open, Rename, Delete, Copy Path, Open in System
-- Search bar for quick file finding
-- Collapsible to icon-only (~48px)
-
-## 4. Widget System
-
-### Widget Interface
-
-```typescript
-interface Widget {
-  id: string
-  name: string
-  icon: string                        // Lucide icon name
-  component: typeof SvelteComponent   // Svelte component to render
-  defaultWidth?: number
-  defaultHeight?: number
-  canPopOut?: boolean                  // Can be popped into separate window
-  category: "builtin" | "mcp" | "skill" | "extension"
-  onActivate?(): void
-  onDeactivate?(): void
-  onPopOut?(): void
-}
-
-class WidgetRegistry {
-  register(widget: Widget): void
-  unregister(id: string): void
-  getAll(): Widget[]
-  getByCategory(cat: string): Widget[]
-}
+#[tauri::command]
+async fn generate_thumbnails_batch(paths: Vec<String>, width: u32, height: u32) -> Result<Vec<ThumbnailResult>, String>
+// Batch generation for folder views. Parallel processing.
 ```
 
-### Built-in Widgets
+### Generation Strategy by File Type
 
-| Widget | Description |
-|--------|-------------|
-| Chat | Chat interface (messages + input) |
-| Terminal | PTY terminal via Tauri + xterm.js |
-| Activity | Real-time agent activity log |
-| Git | Branch, status, diff, commit controls |
-| File Preview | Quick preview of selected file |
-| File Explorer | Directory tree browser |
-| Editor | Monaco-based code editor with file tabs |
-| Command Palette | Searchable agent actions |
+| Type | Strategy |
+|------|----------|
+| Images | Resize with `image` crate |
+| PDFs | Render first page with `pdf-render` or `mupdf` |
+| Code | Syntax-highlight first 10 lines, render to image with `syntect` |
+| Spreadsheets | Render first few rows as a mini table |
+| Video | Extract first frame with `ffmpeg` |
+| Audio | Generate waveform |
+| Folders | Composite mini-grid of top 4 children's thumbnails |
+| Text/Markdown | Render formatted text excerpt |
+| Unknown | File type icon |
 
-### External Widget Registration
+Thumbnails are cached by file path + modified timestamp. Invalidated on file change.
 
-- **MCP tools:** Auto-register widgets when a connected MCP server provides UI-capable tools.
-- **Skills:** Declare `sidebar_widget` in skill manifest. Component loads into layout.
+## 7. Search
 
-### Pop-out Behavior
+### Quick Search (`🔍` or `Cmd+K`)
 
-- Click "pop out" icon on widget header → new Tauri webview window rendering just that widget
-- State synced via bridge system (same as existing side panel sync)
-- Closing popped-out window returns widget to the main layout
+Modal overlay with search input:
 
-## 5. Co-work (Real-time Agent Collaboration)
-
-### Agent Operations Streaming
-
-Agent file operations stream to the workspace in real-time via WebSocket:
-
-```typescript
-type AgentFileEvent =
-  | { type: "file_open", path: string }
-  | { type: "file_edit", path: string, diff: Diff }
-  | { type: "file_create", path: string }
-  | { type: "file_delete", path: string }
-  | { type: "terminal_output", content: string }
+```
+┌─────────────────────────────────────────┐
+│ 🔍 Search files...                       │
+├─────────────────────────────────────────┤
+│ Recent:                                  │
+│   📄 main.py                             │
+│   📁 Documents                           │
+│                                          │
+│ Results:                                 │
+│   📄 report.pdf — "quarterly results..." │
+│   📄 notes.md — contains "meeting..."    │
+│   📁 archive/ — 12 files                 │
+└─────────────────────────────────────────┘
 ```
 
-### Simplified Approval Flow
+- **Filename search:** Instant, as-you-type filtering
+- **Content search:** Searches inside files (full-text index)
+- **AI search:** Natural language queries ("find the pre-edited footage", "where's the budget spreadsheet from last month") routed through the AI agent
 
-- Agent works freely — no approval pop-ups interrupting flow
-- All changes stream to the workspace in real-time (files open, diffs flash, terminal scrolls)
-- User reviews changes via Git widget (status, diff, commit)
-- Toast notification + 5-second "Undo" button for destructive actions only (delete, overwrite)
-
-### Live Cursors
-
-- Agent editing cursor shown in a distinct color in the editor
-- User cursor in a different color
-- Similar to Google Docs collaboration cursors
-
-### Command Palette (`Cmd+K` / `Ctrl+K`)
-
-- Agent actions: "Ask agent to...", "Run tests", "Explain this file", "Fix errors", "Refactor selection"
-- File actions: "Open file", "Search in files", "New file"
-- Workspace actions: "Save layout", "Switch preset", "Toggle terminal"
-
-### Terminal Integration
-
-- Full PTY terminal via `xterm.js` + Tauri PTY commands
-- Agent's shell commands appear in real-time
-- User can type in the same terminal
-- Agent output visually distinct (colored differently)
-
-## 6. File Preview System
-
-| File Type | Renderer | Library | Editable |
-|-----------|----------|---------|----------|
-| Code (.py, .ts, .rs, etc.) | Monaco Editor | `monaco-editor` | Yes |
-| PDF | Page viewer with nav | `pdf.js` | No |
-| Excel/CSV | Table grid | `SheetJS` + custom | Read-only (v1) |
-| Images (.png, .jpg, .svg) | Zoomable viewer | Native `<img>` + pan/zoom | No |
-| Markdown (.md) | Split: raw + rendered | `marked` or `mdsvex` | Yes (raw side) |
-| JSON | Tree viewer + raw | Custom tree + Monaco | Yes |
-| HTML | Rendered preview | `<iframe>` sandbox | Source editable |
-| Video/Audio | Native player | `<video>` / `<audio>` | No |
-| Unknown/Binary | Hex viewer | Custom component | No |
-
-### Monaco Editor Config
-
-- Syntax highlighting for 50+ languages
-- Agent edit highlighting (changed lines glow briefly)
-- Minimap, line numbers, word wrap toggle
-- Diff view mode (side-by-side or inline)
-
-## 7. Mobile Adaptation
+## 8. Mobile Adaptation
 
 ### Phone (< 640px)
 
 ```
 ┌─────────────────────┐
-│                     │
-│   ACTIVE ZONE       │
-│   (full screen)     │
-│   One zone visible  │
-│   at a time         │
-│                     │
+│ 🏠 Home > Project X  │
+│ [Icon ▾]  🔍   💬   │  ← 💬 opens chat as bottom sheet
 ├─────────────────────┤
-│  [📁] [📝] [💬] [⚙] │  Bottom tab bar
+│ ┌─────┐ ┌─────┐    │
+│ │thumb│ │thumb│    │
+│ │nail │ │nail │    │
+│ ├─────┤ ├─────┤    │
+│ │name │ │name │    │
+│ └─────┘ └─────┘    │
+│ ┌─────┐ ┌─────┐    │
+│ │     │ │     │    │
+│ │ ... │ │ ... │    │
+│ └─────┘ └─────┘    │
 └─────────────────────┘
-     [🔍]               Floating command button
 ```
 
-- Bottom tab bar switches between zones: Files, Editor, Chat, Widgets
-- One zone visible at a time (full screen)
-- Swipe left/right to switch zones
-- File tap → switches to Editor zone
-- Widgets stack vertically in scrollable list
-- No pop-out windows
+- File grid is full-width (2 columns)
+- Chat icon (💬) in nav bar opens chat as a **bottom sheet overlay** (slides up from bottom, covers ~70% of screen)
+- Tap file → full-screen detail view with back button
+- Swipe right on detail view → back to grid
+- No persistent sidebar
 
 ### Tablet (640-1024px)
 
-- Two-zone split side-by-side (like iPad multitasking)
-- File explorer + Editor, or Editor + Chat
-- Widgets as slide-over panel from right edge
-- Drag-and-drop between zones
+- File grid takes ~65% width, chat sidebar ~35%
+- Chat sidebar can be collapsed (icon only)
+- Otherwise same as desktop
 
 ### Desktop (> 1024px)
 
-- Full tiling workspace layout
-- All features available
+- Full layout as described above
+- Chat sidebar resizable (min 280px, max 50%)
 
-### Shared State
+## 9. Settings & Preferences
 
-`workspaceStore` holds the same layout tree regardless of platform. Responsive rendering:
-- Mobile: shows one leaf node at a time
-- Tablet: shows two leaf nodes side-by-side
-- Desktop: renders the full tree
+Accessible from a gear icon in the nav bar or Home view.
 
-## 8. New Components Needed
+- **File sources:** Configure local pinned folders, cloud accounts
+- **View preferences:** Default view mode, thumbnail size, sort order
+- **AI settings:** Backend, model, API key (existing settings)
+- **Appearance:** Theme (dark/light/system), vibrancy effects
+- **Keyboard shortcuts:** Customizable
+
+## 10. Components Needed
 
 ### Rust (src-tauri)
 
-- `fs_commands.rs` — Local filesystem operations (read_dir, read_file, write_file, delete, rename, stat)
-- `fs_watcher.rs` — Filesystem watch via `notify` crate, emit events to frontend
-- `pty.rs` — PTY terminal management (spawn shell, read/write, resize)
-- `widget_windows.rs` — Pop-out widget window creation and management
+- `fs_commands.rs` — Local filesystem operations
+- `fs_watcher.rs` — Filesystem watch via `notify` crate
+- `thumbnail.rs` — Thumbnail generation + caching
 
 ### Frontend (SvelteKit)
 
 **Stores:**
-- `workspaceStore` — Tab management, layout tree, active tab, presets
-- `fileSystemStore` — File tree state, open files, providers
-- `widgetStore` — Widget registry, layout positions
+- `explorerStore` — Current path, files, view mode, selection, sort order
+- `chatStore` (existing, enhanced) — Context awareness, multiple chats, file references
 
 **Components:**
-- `TabBar.svelte` — Workspace tab bar
-- `TilingLayout.svelte` — Recursive tiling layout renderer
-- `FileExplorer.svelte` — Tree view with context menus
-- `EditorTabs.svelte` — Monaco editor with file tabs
-- `FilePreview.svelte` — Type-dispatching preview renderer
-- `TerminalWidget.svelte` — xterm.js terminal
-- `GitWidget.svelte` — Git status, diff, commit
-- `CommandPalette.svelte` — Searchable action list
-- `WidgetHeader.svelte` — Widget chrome (title, pop-out, close)
+- `ExplorerShell.svelte` — Main layout (nav bar + file area + chat sidebar)
+- `NavBar.svelte` — Breadcrumbs, search, view mode selector
+- `FileGrid.svelte` — Responsive grid of file cards (Icon/Grid view)
+- `FileList.svelte` — Table view (List mode)
+- `FileColumn.svelte` — Column view (Finder-style)
+- `FileGallery.svelte` — Full-width gallery view
+- `FileCard.svelte` — Individual file card with thumbnail
+- `DetailView.svelte` — Full file preview/editor
+- `ChatSidebar.svelte` — AI chat (enhanced from existing)
+- `ContextPill.svelte` — Shows current AI context (folder/file/selection)
+- `SearchOverlay.svelte` — Quick search modal
+- `ContextMenu.svelte` — Right-click menu
+- Preview renderers (same as before): PDF, Image, Spreadsheet, Code, Markdown, JSON, HTML, Video, Audio, Hex
 
-**Libraries to add:**
-- `monaco-editor` — Code editing
-- `xterm.js` + `@xterm/addon-fit` — Terminal
-- `pdfjs-dist` — PDF rendering
-- `xlsx` (SheetJS) — Excel/CSV
-- `diff` or `diff2html` — Diff visualization
+**Libraries:**
+- `monaco-editor` — Code editing in detail view
+- `pdfjs-dist` — PDF preview
+- `xlsx` (SheetJS) — Spreadsheet preview
+- `marked` — Markdown rendering
+- `diff2html` — Diff display in chat
 
 ### Backend (Python)
 
-- New WebSocket events for agent file operations (`file_open`, `file_edit`, `file_create`, `file_delete`, `terminal_output`)
-- File API endpoints for remote workspace (`/api/v1/workspace/files/*`)
-- PTY management for terminal sessions
+- WebSocket events for agent file operations (create, edit, delete)
+- File API endpoints for remote workspace
+- Thumbnail API for remote files
 
-## 9. Implementation Phases
+## 11. Implementation Phases
 
-### Phase 1: Foundation
-- Tab system + workspaceStore
-- Basic tiling layout engine
-- File explorer (local only) with Tauri fs commands
+### Phase 1: File Explorer Core
+- Rust fs commands + file watcher
+- `explorerStore` + `ExplorerShell`
+- `FileGrid` (Icon view) + `FileCard` with basic thumbnails
+- Navigation bar with breadcrumbs
+- Basic file operations (open, rename, delete)
 
-### Phase 2: Editor & Preview
-- Monaco editor integration
-- File preview system (PDF, images, markdown, JSON)
-- Editor file tabs
+### Phase 2: Chat Sidebar + Context
+- Enhanced `ChatSidebar` with context awareness
+- Context pill (folder/file/selection)
+- Drag files into chat
+- Agent file actions reflected in grid (create, edit, delete animations)
+- Inline terminal blocks in chat
 
-### Phase 3: Widgets
-- Widget registry + built-in widgets
-- Chat widget, Activity widget
-- Pop-out window support
+### Phase 3: View Modes + Detail View
+- Grid, List, Column, Gallery views
+- `DetailView` with all preview renderers
+- Monaco editor for code files
+- PDF, image, spreadsheet, markdown preview
+- File navigation (arrow keys between files)
 
-### Phase 4: Co-work
-- Agent file event streaming
-- Live cursor presence
-- Terminal widget (PTY)
-- Command palette
+### Phase 4: Thumbnails + Search
+- Rust thumbnail generation (images, PDFs, code, video)
+- Thumbnail caching
+- Quick search overlay
+- Full-text search index
+- AI-powered semantic search
 
-### Phase 5: Cloud & Polish
-- Remote filesystem provider
-- Cloud storage providers (Google Drive, Dropbox, S3)
-- Layout presets
-- Mobile responsive adaptation
+### Phase 5: Remote + Cloud
+- Remote filesystem provider (agent workspace)
+- Cloud providers (Google Drive, Dropbox, S3)
+- Settings page for cloud accounts
+- Unified Home view with all sources
 
-### Phase 6: Extensions
-- MCP tool widget auto-registration
-- Skill widget support
-- Git widget
+### Phase 6: Polish
+- Animations (file create/delete/move)
+- Spacebar quick peek
+- Mobile responsive (bottom sheet chat, 2-col grid)
+- Keyboard shortcuts
+- Version history for files
