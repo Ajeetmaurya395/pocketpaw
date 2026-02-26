@@ -172,6 +172,11 @@
             "label": "Security Model",
             "href": "/concepts/security-model",
             "icon": "lucide:shield"
+          },
+          {
+            "label": "Command Centers",
+            "href": "/concepts/command-centers",
+            "icon": "lucide:layout-dashboard"
           }
         ]
       },
@@ -497,6 +502,11 @@
             "label": "Deep Work",
             "href": "/advanced/deep-work",
             "icon": "lucide:brain"
+          },
+          {
+            "label": "PawKit Reference",
+            "href": "/advanced/pawkit",
+            "icon": "lucide:package"
           },
           {
             "label": "Mission Control",
