@@ -153,6 +153,9 @@ export interface BackendInstallHint {
   verify_import?: string;
   verify_attr?: string;
   pip_spec?: string;
+  pip_package?: string;
+  external_cmd?: string;
+  docs_url?: string;
 }
 
 export interface BackendInfo {

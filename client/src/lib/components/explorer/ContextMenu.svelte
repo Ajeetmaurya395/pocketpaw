@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { FileEntry } from "$lib/filesystem";
+  import { localFs, joinPath } from "$lib/filesystem";
   import { explorerStore } from "$lib/stores";
   import { onMount } from "svelte";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
@@ -12,6 +13,11 @@
   import FolderPlus from "@lucide/svelte/icons/folder-plus";
   import CheckSquare from "@lucide/svelte/icons/check-square";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Scissors from "@lucide/svelte/icons/scissors";
+  import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
+  import FilePlus from "@lucide/svelte/icons/file-plus";
+  import Terminal from "@lucide/svelte/icons/terminal";
+  import Info from "@lucide/svelte/icons/info";
   import { cn } from "$lib/utils";
 
   let {
@@ -19,11 +25,13 @@
     y,
     file,
     onClose,
+    onShowProperties,
   }: {
     x: number;
     y: number;
     file: FileEntry | null;
     onClose: () => void;
+    onShowProperties?: (path: string) => void;
   } = $props();
 
   let menuRef = $state<HTMLDivElement | null>(null);
@@ -70,7 +78,7 @@
   let items = $derived.by((): MenuEntry[] => {
     if (!file) {
       // Background context menu
-      return [
+      const bgItems: MenuEntry[] = [
         {
           label: "New Folder",
           icon: FolderPlus,
@@ -80,7 +88,32 @@
             onClose();
           },
         },
+        {
+          label: "New File",
+          icon: FilePlus,
+          action: async () => {
+            const name = prompt("New file name:");
+            if (name && explorerStore.currentPath) {
+              await localFs.writeFile(joinPath(explorerStore.currentPath, name), "");
+              explorerStore.refresh();
+            }
+            onClose();
+          },
+        },
         "separator",
+      ];
+      if (explorerStore.clipboardFiles.size > 0) {
+        bgItems.push({
+          label: "Paste",
+          icon: ClipboardPaste,
+          action: () => {
+            explorerStore.paste();
+            onClose();
+          },
+        });
+        bgItems.push("separator");
+      }
+      bgItems.push(
         {
           label: "Select All",
           icon: CheckSquare,
@@ -97,7 +130,17 @@
             onClose();
           },
         },
-      ];
+        "separator",
+        {
+          label: "Open in Terminal",
+          icon: Terminal,
+          action: async () => {
+            await localFs.openInTerminal(explorerStore.currentPath);
+            onClose();
+          },
+        },
+      );
+      return bgItems;
     }
 
     const result: MenuEntry[] = [];
@@ -149,6 +192,30 @@
       },
     });
 
+    result.push({
+      label: "Copy",
+      icon: Copy,
+      action: () => {
+        if (!explorerStore.selectedFiles.has(file.path)) {
+          explorerStore.selectFile(file.path);
+        }
+        explorerStore.copyToClipboard();
+        onClose();
+      },
+    });
+
+    result.push({
+      label: "Cut",
+      icon: Scissors,
+      action: () => {
+        if (!explorerStore.selectedFiles.has(file.path)) {
+          explorerStore.selectFile(file.path);
+        }
+        explorerStore.cutToClipboard();
+        onClose();
+      },
+    });
+
     if (file.isDir) {
       result.push({
         label: "Pin to Home",
@@ -168,6 +235,26 @@
       icon: Pencil,
       action: () => {
         explorerStore.startRename(file.path);
+        onClose();
+      },
+    });
+
+    if (file.isDir) {
+      result.push({
+        label: "Open in Terminal",
+        icon: Terminal,
+        action: async () => {
+          await localFs.openInTerminal(file.path);
+          onClose();
+        },
+      });
+    }
+
+    result.push({
+      label: "Properties",
+      icon: Info,
+      action: () => {
+        onShowProperties?.(file.path);
         onClose();
       },
     });

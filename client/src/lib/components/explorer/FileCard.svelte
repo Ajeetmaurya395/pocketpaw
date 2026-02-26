@@ -10,22 +10,38 @@
     file,
     isSelected = false,
     isRenaming = false,
+    isCut = false,
+    isFocused = false,
     onclick,
     ondblclick,
     oncontextmenu,
+    ondragstart,
+    ondrop,
   }: {
     file: FileEntry;
     isSelected?: boolean;
     isRenaming?: boolean;
+    isCut?: boolean;
+    isFocused?: boolean;
     onclick?: (e: MouseEvent) => void;
     ondblclick?: (e: MouseEvent) => void;
     oncontextmenu?: (e: MouseEvent) => void;
+    ondragstart?: (e: DragEvent) => void;
+    ondrop?: (e: DragEvent) => void;
   } = $props();
 
   let thumbnailUrl = $state<string | null>(null);
   let thumbnailLoaded = $state(false);
+  let isDragOver = $state(false);
+  let buttonRef = $state<HTMLButtonElement | null>(null);
 
   let isImage = $derived(!file.isDir && isImageFile(file.extension));
+
+  $effect(() => {
+    if (isFocused && buttonRef) {
+      buttonRef.scrollIntoView({ block: "nearest" });
+    }
+  });
 
   function handleThumbnailLoad(url: string) {
     thumbnailUrl = url;
@@ -51,15 +67,35 @@
 </script>
 
 <button
+  bind:this={buttonRef}
   type="button"
+  draggable="true"
   class={cn(
     "group flex w-40 flex-col items-center gap-1 rounded-lg border border-transparent p-3 text-left transition-all",
     "hover:bg-muted/50",
     isSelected && "border-primary/50 bg-primary/10 ring-1 ring-primary/30",
+    isCut && "opacity-50",
+    isFocused && "ring-1 ring-ring/50",
+    isDragOver && file.isDir && "border-primary bg-primary/10",
   )}
   {onclick}
   {ondblclick}
   {oncontextmenu}
+  ondragstart={(e) => ondragstart?.(e)}
+  ondragover={(e) => {
+    if (file.isDir) {
+      e.preventDefault();
+      isDragOver = true;
+    }
+  }}
+  ondragleave={() => { isDragOver = false; }}
+  ondrop={(e) => {
+    isDragOver = false;
+    if (file.isDir) {
+      e.preventDefault();
+      ondrop?.(e);
+    }
+  }}
 >
   <!-- Thumbnail area -->
   <div
@@ -70,6 +106,7 @@
     use:thumbnailAction={{
       path: file.path,
       extension: file.extension,
+      modified: file.modified,
       onLoad: handleThumbnailLoad,
     }}
   >

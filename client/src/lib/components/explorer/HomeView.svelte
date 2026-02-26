@@ -67,7 +67,7 @@
       {#each localFolders as folder}
         <button
           type="button"
-          class="flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-all hover:border-border/80 hover:bg-muted/50"
+          class="flex items-center gap-3 rounded-lg border border-border bg-card/20 p-4 transition-all hover:border-border/80 hover:bg-card/50"
           onclick={() => explorerStore.navigateTo(folder.path)}
         >
           <Folder class="h-7 w-7 text-yellow-400" />

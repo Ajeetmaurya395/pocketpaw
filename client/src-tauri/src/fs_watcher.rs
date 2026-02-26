@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct FileChangeEvent {
     pub path: String,
     pub kind: String,
+    pub is_dir: bool,
 }
 
 pub struct WatcherState {
@@ -49,9 +50,13 @@ pub fn fs_watch(path: String, app: AppHandle) -> Result<(), String> {
         if let Ok(event) = res {
             if let Some(kind_str) = event_kind_to_string(&event.kind) {
                 for path in &event.paths {
+                    let is_dir = std::fs::metadata(path)
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false);
                     let payload = FileChangeEvent {
                         path: path.to_string_lossy().to_string(),
                         kind: kind_str.to_string(),
+                        is_dir,
                     };
                     let _ = app_handle.emit("fs-change", &payload);
                 }

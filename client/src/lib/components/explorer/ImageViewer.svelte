@@ -19,6 +19,13 @@
   let scale = $state(1);
   let naturalWidth = $state(0);
   let naturalHeight = $state(0);
+  let offsetX = $state(0);
+  let offsetY = $state(0);
+  let isDragging = $state(false);
+  let dragStartX = $state(0);
+  let dragStartY = $state(0);
+  let dragStartOffsetX = $state(0);
+  let dragStartOffsetY = $state(0);
 
   function zoomIn() {
     scale = Math.min(scale * 1.25, 5);
@@ -30,6 +37,8 @@
 
   function resetZoom() {
     scale = 1;
+    offsetX = 0;
+    offsetY = 0;
   }
 
   function handleLoad(e: Event) {
@@ -49,6 +58,25 @@
       if (e.deltaY < 0) zoomIn();
       else zoomOut();
     }
+  }
+
+  function handleMouseDown(e: MouseEvent) {
+    if (scale <= 1) return;
+    isDragging = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragStartOffsetX = offsetX;
+    dragStartOffsetY = offsetY;
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!isDragging) return;
+    offsetX = dragStartOffsetX + (e.clientX - dragStartX);
+    offsetY = dragStartOffsetY + (e.clientY - dragStartY);
+  }
+
+  function handleMouseUp() {
+    isDragging = false;
   }
 </script>
 
@@ -91,8 +119,15 @@
   <!-- Image area -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
-    class="flex flex-1 items-center justify-center overflow-auto bg-[#1a1a1a]/50 p-4"
+    class={cn(
+      "flex flex-1 items-center justify-center overflow-hidden bg-[#1a1a1a]/50 p-4",
+      scale > 1 ? (isDragging ? "cursor-grabbing" : "cursor-grab") : "",
+    )}
     onwheel={handleWheel}
+    onmousedown={handleMouseDown}
+    onmousemove={handleMouseMove}
+    onmouseup={handleMouseUp}
+    onmouseleave={handleMouseUp}
   >
     {#if !src}
       <div class="flex flex-col items-center gap-2 text-muted-foreground">
@@ -109,10 +144,11 @@
         {src}
         {alt}
         class={cn(
-          "max-h-full max-w-full object-contain transition-transform duration-150",
+          "max-h-full max-w-full select-none object-contain",
           !loaded && "invisible",
+          !isDragging && "transition-transform duration-150",
         )}
-        style:transform="scale({scale})"
+        style:transform="scale({scale}) translate({offsetX / scale}px, {offsetY / scale}px)"
         onload={handleLoad}
         onerror={handleError}
         draggable="false"

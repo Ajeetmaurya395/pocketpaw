@@ -7,6 +7,40 @@
   import Check from "@lucide/svelte/icons/check";
   import { cn } from "$lib/utils";
   import { localFs, joinPath, isAbsolute, isImageFile } from "$lib/filesystem";
+  import hljs from "highlight.js/lib/core";
+  import javascript from "highlight.js/lib/languages/javascript";
+  import typescript from "highlight.js/lib/languages/typescript";
+  import python from "highlight.js/lib/languages/python";
+  import rust from "highlight.js/lib/languages/rust";
+  import css from "highlight.js/lib/languages/css";
+  import json from "highlight.js/lib/languages/json";
+  import bash from "highlight.js/lib/languages/bash";
+  import yaml from "highlight.js/lib/languages/yaml";
+  import sql from "highlight.js/lib/languages/sql";
+  import xml from "highlight.js/lib/languages/xml";
+  import go from "highlight.js/lib/languages/go";
+  import java from "highlight.js/lib/languages/java";
+
+  hljs.registerLanguage("javascript", javascript);
+  hljs.registerLanguage("js", javascript);
+  hljs.registerLanguage("typescript", typescript);
+  hljs.registerLanguage("ts", typescript);
+  hljs.registerLanguage("python", python);
+  hljs.registerLanguage("py", python);
+  hljs.registerLanguage("rust", rust);
+  hljs.registerLanguage("rs", rust);
+  hljs.registerLanguage("css", css);
+  hljs.registerLanguage("json", json);
+  hljs.registerLanguage("bash", bash);
+  hljs.registerLanguage("sh", bash);
+  hljs.registerLanguage("shell", bash);
+  hljs.registerLanguage("yaml", yaml);
+  hljs.registerLanguage("yml", yaml);
+  hljs.registerLanguage("sql", sql);
+  hljs.registerLanguage("xml", xml);
+  hljs.registerLanguage("html", xml);
+  hljs.registerLanguage("go", go);
+  hljs.registerLanguage("java", java);
 
   let {
     content = "",
@@ -83,6 +117,14 @@
       return `<li class="task-item">${checkbox} ${text}</li>`;
     }
     return `<li>${text}</li>`;
+  };
+
+  renderer.code = function ({ text, lang }: { text: string; lang?: string }) {
+    if (lang && hljs.getLanguage(lang)) {
+      const highlighted = hljs.highlight(text, { language: lang }).value;
+      return `<pre><code class="hljs language-${lang}">${highlighted}</code></pre>`;
+    }
+    return `<pre><code>${text}</code></pre>`;
   };
 
   marked.setOptions({ renderer, gfm: true, breaks: false });
@@ -411,4 +453,19 @@
     cursor: pointer;
     font-weight: 600;
   }
+
+  /* highlight.js One Dark token colors */
+  .md-document :global(.hljs-keyword) { color: #c678dd; }
+  .md-document :global(.hljs-string) { color: #98c379; }
+  .md-document :global(.hljs-number) { color: #d19a66; }
+  .md-document :global(.hljs-comment) { color: #5c6370; font-style: italic; }
+  .md-document :global(.hljs-function),
+  .md-document :global(.hljs-title) { color: #61afef; }
+  .md-document :global(.hljs-built_in) { color: #e6c07b; }
+  .md-document :global(.hljs-literal) { color: #d19a66; }
+  .md-document :global(.hljs-attr) { color: #d19a66; }
+  .md-document :global(.hljs-type) { color: #e6c07b; }
+  .md-document :global(.hljs-params) { color: #abb2bf; }
+  .md-document :global(.hljs-variable) { color: #e06c75; }
+  .md-document :global(.hljs-meta) { color: #61afef; }
 </style>

@@ -23,7 +23,7 @@
   let isAttached = $state(false);
   let tokenUpdateUnsub: (() => void) | null = null;
 
-  let panelBg = $derived(platformStore.hasNativeBlur ? "bg-transparent" : "bg-background");
+  let panelBg = $derived(platformStore.hasNativeBlur ? "bg-transparent" : "");
 
   // Set data-native-blur attribute and transparent body for side panel window
   $effect(() => {

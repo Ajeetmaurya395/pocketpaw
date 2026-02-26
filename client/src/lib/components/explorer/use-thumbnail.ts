@@ -4,6 +4,7 @@ import type { ActionReturn } from "svelte/action";
 interface ThumbnailParams {
   path: string;
   extension: string;
+  modified: number;
   onLoad: (dataUrl: string) => void;
 }
 
@@ -14,6 +15,7 @@ export function thumbnailAction(
   let observer: IntersectionObserver | null = null;
   let currentParams = params;
   let loaded = false;
+  let lastModified = params.modified;
 
   function setup() {
     cleanup();
@@ -46,8 +48,13 @@ export function thumbnailAction(
 
   return {
     update(newParams: ThumbnailParams) {
+      const pathChanged = newParams.path !== currentParams.path;
+      const modifiedChanged = newParams.modified !== lastModified;
       currentParams = newParams;
-      setup();
+      if (pathChanged || modifiedChanged) {
+        lastModified = newParams.modified;
+        setup();
+      }
     },
     destroy() {
       cleanup();

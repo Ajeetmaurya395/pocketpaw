@@ -12,14 +12,40 @@
     content = "",
     extension = "",
     readonly = true,
+    resetContent = 0,
+    onsave,
+    ondirtychange,
   }: {
     content?: string;
     extension?: string;
     readonly?: boolean;
+    resetContent?: number;
+    onsave?: (content: string) => void;
+    ondirtychange?: (dirty: boolean) => void;
   } = $props();
 
   let editorContainer = $state<HTMLDivElement | null>(null);
   let view: EditorView | null = null;
+  let lastResetContent = 0;
+  let isDirtyRef = { current: false };
+
+  // Watch resetContent counter — replace document when incremented
+  $effect(() => {
+    if (resetContent !== lastResetContent) {
+      lastResetContent = resetContent;
+      if (view) {
+        view.dispatch({
+          changes: {
+            from: 0,
+            to: view.state.doc.length,
+            insert: content,
+          },
+        });
+        isDirtyRef.current = false;
+        ondirtychange?.(false);
+      }
+    }
+  });
 
   async function getLanguageExtension(ext: string) {
     const e = ext.toLowerCase();
@@ -138,6 +164,18 @@
       const langExt = await getLanguageExtension(extension);
       if (destroyed || !editorContainer) return;
 
+      const saveKeyBinding = {
+        key: "Mod-s",
+        run: (editorView: EditorView) => {
+          if (onsave) {
+            onsave(editorView.state.doc.toString());
+            isDirtyRef.current = false;
+            ondirtychange?.(false);
+          }
+          return true;
+        },
+      };
+
       const extensions = [
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -152,6 +190,7 @@
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         oneDark,
         keymap.of([
+          saveKeyBinding,
           ...closeBracketsKeymap,
           ...defaultKeymap,
           ...searchKeymap,
@@ -161,6 +200,17 @@
         history(),
         EditorView.lineWrapping,
       ];
+
+      if (!readonly) {
+        extensions.push(
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged && !isDirtyRef.current) {
+              isDirtyRef.current = true;
+              ondirtychange?.(true);
+            }
+          }),
+        );
+      }
 
       if (langExt) extensions.push(langExt);
       if (readonly) extensions.push(EditorState.readOnly.of(true));

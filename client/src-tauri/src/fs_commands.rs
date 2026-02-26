@@ -5,6 +5,19 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+#[derive(Debug, Serialize)]
+pub struct FileStatExtended {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: u64,
+    pub created: u64,
+    pub extension: String,
+    pub readonly: bool,
+    pub is_symlink: bool,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct FileEntry {
     pub name: String,
@@ -208,4 +221,128 @@ pub fn fs_get_default_dirs() -> Result<DefaultDirs, String> {
         downloads,
         desktop,
     })
+}
+
+#[tauri::command]
+pub fn fs_copy_file(src: String, dest: String) -> Result<(), String> {
+    fs::copy(&src, &dest)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to copy file: {}", e))
+}
+
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest).map_err(|e| format!("Failed to create dir {}: {}", dest.display(), e))?;
+    for entry in fs::read_dir(src).map_err(|e| format!("Failed to read dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+        let entry_path = entry.path();
+        let dest_path = dest.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_recursive(&entry_path, &dest_path)?;
+        } else {
+            fs::copy(&entry_path, &dest_path)
+                .map_err(|e| format!("Failed to copy {}: {}", entry_path.display(), e))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn fs_copy_dir(src: String, dest: String) -> Result<(), String> {
+    copy_dir_recursive(Path::new(&src), Path::new(&dest))
+}
+
+#[tauri::command]
+pub fn fs_stat_extended(path: String) -> Result<FileStatExtended, String> {
+    let p = Path::new(&path);
+    let symlink_meta = fs::symlink_metadata(p)
+        .map_err(|e| format!("Failed to stat {}: {}", p.display(), e))?;
+    let is_symlink = symlink_meta.file_type().is_symlink();
+
+    let meta = fs::metadata(p)
+        .map_err(|e| format!("Failed to stat {}: {}", p.display(), e))?;
+
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let created = meta
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let extension = p
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let readonly = meta.permissions().readonly();
+
+    Ok(FileStatExtended {
+        name,
+        path: path_to_string(p),
+        is_dir: meta.is_dir(),
+        size: meta.len(),
+        modified,
+        created,
+        extension,
+        readonly,
+        is_symlink,
+    })
+}
+
+#[tauri::command]
+pub fn fs_open_in_terminal(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    let dir = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+    let dir_str = dir.to_string_lossy().to_string();
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "cmd", "/k", &format!("cd /d \"{}\"", dir_str)])
+            .spawn()
+            .map_err(|e| format!("Failed to open terminal: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-a", "Terminal", &dir_str])
+            .spawn()
+            .map_err(|e| format!("Failed to open terminal: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let terminals = [
+            ("x-terminal-emulator", vec!["--working-directory", &dir_str]),
+            ("gnome-terminal", vec!["--working-directory", &dir_str]),
+            ("konsole", vec!["--workdir", &dir_str]),
+            ("xfce4-terminal", vec!["--working-directory", &dir_str]),
+            ("xterm", vec!["-e", &format!("cd '{}' && $SHELL", dir_str)]),
+        ];
+        let mut launched = false;
+        for (cmd, args) in &terminals {
+            if std::process::Command::new(cmd)
+                .args(args)
+                .spawn()
+                .is_ok()
+            {
+                launched = true;
+                break;
+            }
+        }
+        if !launched {
+            return Err("No terminal emulator found".to_string());
+        }
+    }
+
+    Ok(())
 }

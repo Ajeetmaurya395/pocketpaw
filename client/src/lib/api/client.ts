@@ -439,6 +439,11 @@ export class PocketPawClient {
     await this.post("/backends/install", { backend: name });
   }
 
+  async fetchOllamaModels(host?: string): Promise<string[]> {
+    const params = host ? `?host=${encodeURIComponent(host)}` : "";
+    return this.get<string[]>(`/backends/ollama-models${params}`);
+  }
+
   // ---------------------------------------------------------------------------
   // Health
   // ---------------------------------------------------------------------------

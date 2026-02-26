@@ -1,4 +1,5 @@
 export { LocalFileSystem } from "./local";
+export type { FileStatExtended } from "./local";
 export type { FileEntry, DefaultDirs, FileChangeEvent, FileSystemProvider } from "./types";
 export {
   getThumbnail,

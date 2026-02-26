@@ -18,6 +18,7 @@ export interface DefaultDirs {
 export interface FileChangeEvent {
   path: string;
   kind: "create" | "modify" | "delete";
+  is_dir: boolean;
 }
 
 export interface FileSystemProvider {

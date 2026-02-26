@@ -1,14 +1,19 @@
 <script lang="ts">
   import { explorerStore } from "$lib/stores";
+  import { localFs, joinPath, getFileName } from "$lib/filesystem";
   import FileListRow from "./FileListRow.svelte";
   import ContextMenu from "./ContextMenu.svelte";
+  import PropertiesDialog from "./PropertiesDialog.svelte";
   import type { FileEntry } from "$lib/filesystem";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import ArrowDown from "@lucide/svelte/icons/arrow-down";
   import { cn } from "$lib/utils";
 
+  const DRAG_MIME = "application/x-pocketpaw-files";
+
   let contextMenu = $state<{ x: number; y: number; file: FileEntry | null } | null>(null);
+  let propertiesPath = $state<string | null>(null);
 
   function handleClick(file: FileEntry, e: MouseEvent) {
     explorerStore.selectFile(file.path, e.ctrlKey || e.metaKey);
@@ -42,6 +47,39 @@
 
   function handleSort(field: "name" | "modified" | "size" | "type") {
     explorerStore.setSortBy(field);
+  }
+
+  function handleDragStart(file: FileEntry, e: DragEvent) {
+    if (!e.dataTransfer) return;
+    const paths = explorerStore.selectedFiles.has(file.path)
+      ? [...explorerStore.selectedFiles]
+      : [file.path];
+    const mode = e.shiftKey ? "copy" : "move";
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ paths, mode }));
+    e.dataTransfer.effectAllowed = e.shiftKey ? "copy" : "move";
+  }
+
+  async function handleFileDrop(targetDir: string, e: DragEvent) {
+    if (!e.dataTransfer) return;
+    const raw = e.dataTransfer.getData(DRAG_MIME);
+    if (!raw) return;
+    try {
+      const { paths, mode } = JSON.parse(raw) as { paths: string[]; mode: "copy" | "move" };
+      for (const srcPath of paths) {
+        const name = getFileName(srcPath);
+        const destPath = joinPath(targetDir, name);
+        const stat = await localFs.stat(srcPath);
+        if (mode === "copy") {
+          if (stat.isDir) await localFs.copyDir(srcPath, destPath);
+          else await localFs.copyFile(srcPath, destPath);
+        } else {
+          await localFs.moveFile(srcPath, destPath);
+        }
+      }
+      await explorerStore.refresh();
+    } catch (err) {
+      console.error("Drop failed:", err);
+    }
   }
 
   const columns = [
@@ -124,14 +162,18 @@
       </div>
 
       <!-- File rows -->
-      {#each explorerStore.sortedFiles as file (file.path)}
+      {#each explorerStore.sortedFiles as file, i (file.path)}
         <FileListRow
           {file}
           isSelected={explorerStore.selectedFiles.has(file.path)}
           isRenaming={explorerStore.renamingFile === file.path}
+          isCut={explorerStore.clipboardMode === "cut" && explorerStore.clipboardFiles.has(file.path)}
+          isFocused={explorerStore.focusedIndex === i}
           onclick={(e) => handleClick(file, e)}
           ondblclick={() => handleDblClick(file)}
           oncontextmenu={(e) => handleContextMenu(file, e)}
+          ondragstart={(e) => handleDragStart(file, e)}
+          ondrop={(e) => handleFileDrop(file.path, e)}
         />
       {/each}
     </div>
@@ -144,5 +186,10 @@
     y={contextMenu.y}
     file={contextMenu.file}
     onClose={() => (contextMenu = null)}
+    onShowProperties={(path) => { propertiesPath = path; }}
   />
+{/if}
+
+{#if propertiesPath}
+  <PropertiesDialog filePath={propertiesPath} onClose={() => { propertiesPath = null; }} />
 {/if}

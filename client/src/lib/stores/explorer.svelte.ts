@@ -1,5 +1,5 @@
-import type { FileEntry, DefaultDirs } from "$lib/filesystem";
-import { localFs } from "$lib/filesystem";
+import type { FileEntry, DefaultDirs, FileChangeEvent } from "$lib/filesystem";
+import { localFs, joinPath, getFileName, invalidateThumbnail, isImageFile } from "$lib/filesystem";
 
 export interface Breadcrumb {
   name: string;
@@ -33,8 +33,13 @@ class ExplorerStore {
   pinnedFolders = $state<PinnedFolder[]>([]);
   searchQuery = $state("");
   renamingFile = $state<string | null>(null);
+  clipboardFiles = $state<Set<string>>(new Set());
+  clipboardMode = $state<"copy" | "cut" | null>(null);
+  focusedIndex = $state(-1);
+  openFileChangedOnDisk = $state(0);
 
   private unwatchFn: (() => void) | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   filteredFiles = $derived.by(() => {
     if (!this.searchQuery.trim()) return this.files;
@@ -123,6 +128,7 @@ class ExplorerStore {
     this.openFile = null;
     this.selectedFiles = new Set();
     this.searchQuery = "";
+    this.focusedIndex = -1;
 
     try {
       const s = source ?? this.currentSource;
@@ -180,6 +186,7 @@ class ExplorerStore {
     this.openFile = null;
     this.selectedFiles = new Set();
     this.searchQuery = "";
+    this.focusedIndex = -1;
     this.error = null;
     this.stopWatching();
   }
@@ -212,6 +219,55 @@ class ExplorerStore {
 
   clearSelection(): void {
     this.selectedFiles = new Set();
+  }
+
+  copyToClipboard(): void {
+    if (this.selectedFiles.size === 0) return;
+    this.clipboardFiles = new Set(this.selectedFiles);
+    this.clipboardMode = "copy";
+  }
+
+  cutToClipboard(): void {
+    if (this.selectedFiles.size === 0) return;
+    this.clipboardFiles = new Set(this.selectedFiles);
+    this.clipboardMode = "cut";
+  }
+
+  async paste(): Promise<void> {
+    if (this.clipboardFiles.size === 0 || !this.clipboardMode || !this.currentPath) return;
+    try {
+      for (const srcPath of this.clipboardFiles) {
+        const name = getFileName(srcPath);
+        const destPath = joinPath(this.currentPath, name);
+        const stat = await localFs.stat(srcPath);
+        if (this.clipboardMode === "copy") {
+          if (stat.isDir) {
+            await localFs.copyDir(srcPath, destPath);
+          } else {
+            await localFs.copyFile(srcPath, destPath);
+          }
+        } else {
+          await localFs.moveFile(srcPath, destPath);
+        }
+      }
+      if (this.clipboardMode === "cut") {
+        this.clipboardFiles = new Set();
+        this.clipboardMode = null;
+      }
+      await this.refresh();
+    } catch (e) {
+      console.error("Paste failed:", e);
+    }
+  }
+
+  moveFocus(delta: number): void {
+    const files = this.sortedFiles;
+    if (files.length === 0) return;
+    let next = this.focusedIndex + delta;
+    if (next < 0) next = 0;
+    if (next >= files.length) next = files.length - 1;
+    this.focusedIndex = next;
+    this.selectedFiles = new Set([files[next].path]);
   }
 
   setViewMode(mode: typeof this.viewMode): void {
@@ -291,6 +347,7 @@ class ExplorerStore {
     this.openFile = null;
     this.selectedFiles = new Set();
     this.searchQuery = "";
+    this.focusedIndex = -1;
     try {
       this.files = await localFs.readDir(path);
       this.currentPath = path;
@@ -302,12 +359,38 @@ class ExplorerStore {
     }
   }
 
+  private debouncedRefresh(): void {
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.refresh();
+    }, 400);
+  }
+
   private async startWatching(path: string): Promise<void> {
     this.stopWatching();
     try {
-      this.unwatchFn = await localFs.watch(path, () => {
-        // Debounce: just refresh
-        this.refresh();
+      this.unwatchFn = await localFs.watch(path, (event: FileChangeEvent) => {
+        const eventPath = event.path.replace(/\\/g, "/");
+
+        // On image modify, invalidate its thumbnail
+        if (event.kind === "modify" && !event.is_dir) {
+          const ext = eventPath.split(".").pop()?.toLowerCase() ?? "";
+          if (isImageFile(ext)) {
+            invalidateThumbnail(event.path);
+          }
+        }
+
+        // If the open file was modified, signal the viewer
+        if (event.kind === "modify" && this.openFile) {
+          const openPath = this.openFile.path.replace(/\\/g, "/");
+          if (eventPath === openPath) {
+            this.openFileChangedOnDisk++;
+          }
+        }
+
+        // Always debounce-refresh the directory listing
+        this.debouncedRefresh();
       });
     } catch {
       // Watching not available
@@ -315,6 +398,10 @@ class ExplorerStore {
   }
 
   private stopWatching(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
     if (this.unwatchFn) {
       this.unwatchFn();
       this.unwatchFn = null;

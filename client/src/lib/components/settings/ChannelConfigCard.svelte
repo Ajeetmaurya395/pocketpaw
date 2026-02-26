@@ -403,7 +403,7 @@
 </script>
 
 <!-- Card Layout -->
-<div class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-muted/30 p-4 transition-colors hover:bg-muted/50">
+<div class="group flex flex-col gap-3 rounded-lg border border-border/60 bg-card/10 p-4 transition-colors hover:bg-card/50">
   <!-- Header: Icon + Name + Badges -->
   <div class="flex items-center gap-2.5">
     <div class={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg", colors.bg)}>

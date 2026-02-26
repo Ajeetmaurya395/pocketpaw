@@ -86,8 +86,8 @@
           class={[
             "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm transition-colors",
             activeSection === section.id
-              ? "bg-accent font-medium text-foreground"
-              : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              ? "bg-card font-medium text-foreground"
+              : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
           ].join(" ")}
         >
           <Icon class="h-4 w-4 shrink-0" strokeWidth={1.75} />

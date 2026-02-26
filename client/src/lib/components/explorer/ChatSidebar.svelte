@@ -4,7 +4,7 @@
   import X from "@lucide/svelte/icons/x";
 </script>
 
-<div class="flex h-full w-[360px] shrink-0 flex-col border-l border-border bg-background">
+<div class="flex h-full w-[360px] shrink-0 flex-col border-l border-border ">
   <!-- Header -->
   <div class="flex h-11 items-center justify-between border-b border-border px-3">
     <span class="text-sm font-medium text-foreground">Chat</span>

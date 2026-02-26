@@ -14,8 +14,8 @@
 
   let sidebarClass = $derived(
     isDrawer
-      ? "glass flex h-full w-full flex-col overflow-hidden"
-      : "glass flex h-full w-[260px] shrink-0 flex-col overflow-hidden"
+      ? "flex h-full w-full flex-col overflow-hidden bg-background border-r border-border"
+      : "flex h-full w-[260px] shrink-0 flex-col overflow-hidden  border-r border-border"
   );
 </script>
 
