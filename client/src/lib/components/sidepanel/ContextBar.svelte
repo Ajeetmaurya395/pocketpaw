@@ -1,5 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { Link } from "@lucide/svelte";
+  import {
+    onAttachChanged,
+    type AttachChangedPayload,
+  } from "$lib/tauri/bridge";
 
   interface ActiveContext {
     app_name: string;
@@ -10,6 +15,8 @@
 
   let context = $state<ActiveContext | null>(null);
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let isAttached = $state(false);
+  let attachedAppName = $state("");
 
   let displayText = $derived.by(() => {
     if (!context || (!context.app_name && !context.window_title)) {
@@ -59,9 +66,24 @@
     }
   }
 
+  async function unsnap() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("detach_side_panel");
+    } catch {
+      // Not in Tauri
+    }
+  }
+
   onMount(() => {
     pollContext();
     pollTimer = setInterval(pollContext, 2000);
+
+    // Listen for attach state changes
+    onAttachChanged((payload: AttachChangedPayload) => {
+      isAttached = payload.attached;
+      attachedAppName = payload.app_name;
+    });
   });
 
   onDestroy(() => {
@@ -72,7 +94,23 @@
 <div class="flex items-center gap-2 border-b border-border/30 px-3 py-2">
   <span class="text-sm">{icon}</span>
   <div class="min-w-0 flex-1">
-    <p class="text-[10px] text-muted-foreground/60">Working on:</p>
-    <p class="truncate text-xs text-foreground/80">{displayText}</p>
+    {#if isAttached && attachedAppName}
+      <div class="flex items-center gap-1">
+        <Link class="h-2.5 w-2.5 text-primary" />
+        <p class="text-[10px] text-primary">Snapped to:</p>
+      </div>
+      <div class="flex items-center gap-1">
+        <p class="min-w-0 flex-1 truncate text-xs text-foreground/80">{attachedAppName}</p>
+        <button
+          onclick={unsnap}
+          class="shrink-0 rounded px-1 py-0.5 text-[9px] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+        >
+          Unsnap
+        </button>
+      </div>
+    {:else}
+      <p class="text-[10px] text-muted-foreground/60">Working on:</p>
+      <p class="truncate text-xs text-foreground/80">{displayText}</p>
+    {/if}
   </div>
 </div>

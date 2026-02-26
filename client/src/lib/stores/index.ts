@@ -6,8 +6,9 @@ import { activityStore } from "./activity.svelte";
 import { skillStore } from "./skills.svelte";
 import { uiStore } from "./ui.svelte";
 import { platformStore } from "./platform.svelte";
+import { explorerStore } from "./explorer.svelte";
 
-export { connectionStore, chatStore, sessionStore, settingsStore, activityStore, skillStore, uiStore, platformStore };
+export { connectionStore, chatStore, sessionStore, settingsStore, activityStore, skillStore, uiStore, platformStore, explorerStore };
 export type { ActivityEntry } from "./activity.svelte";
 
 // Master initialization — called once on app startup after obtaining a token.
@@ -29,4 +30,7 @@ export async function initializeStores(token: string, baseUrl?: string, wsToken?
     sessionStore.loadSessions(),
     settingsStore.load(),
   ]);
+
+  // Initialize explorer store (loads default dirs, pinned folders)
+  explorerStore.initialize();
 }

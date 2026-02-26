@@ -2,6 +2,8 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_positioner::{Position, WindowExt};
 
+use crate::window_attach::{self, AttachMode};
+
 /// Managed state for the side panel's collapse/dock modes.
 pub struct SidePanelState {
     pub collapsed: Mutex<bool>,
@@ -25,11 +27,15 @@ pub fn toggle_side_panel(app: AppHandle) -> Result<(), String> {
     if let Some(panel) = app.get_webview_window("sidepanel") {
         let visible = panel.is_visible().unwrap_or(false);
         if visible {
+            // Restore attached window before hiding
+            window_attach::restore_and_detach(&app);
             panel.hide().map_err(|e| e.to_string())?;
         } else {
             position_side_panel(&app, &panel)?;
             panel.show().map_err(|e| e.to_string())?;
             panel.set_focus().map_err(|e| e.to_string())?;
+            // If in Auto mode, try to attach to the foreground window
+            window_attach::try_attach_to_foreground(&app);
         }
     }
     Ok(())
@@ -42,6 +48,8 @@ pub fn show_side_panel(app: AppHandle) -> Result<(), String> {
         position_side_panel(&app, &panel)?;
         panel.show().map_err(|e| e.to_string())?;
         panel.set_focus().map_err(|e| e.to_string())?;
+        // If in Auto mode, try to attach to the foreground window
+        window_attach::try_attach_to_foreground(&app);
     }
     Ok(())
 }
@@ -49,6 +57,8 @@ pub fn show_side_panel(app: AppHandle) -> Result<(), String> {
 /// Hide the side panel.
 #[tauri::command]
 pub fn hide_side_panel(app: AppHandle) -> Result<(), String> {
+    // Restore attached window before hiding
+    window_attach::restore_and_detach(&app);
     if let Some(panel) = app.get_webview_window("sidepanel") {
         panel.hide().map_err(|e| e.to_string())?;
     }
@@ -163,10 +173,18 @@ pub fn dock_side_panel(app: AppHandle, edge: String) -> Result<(), String> {
 }
 
 /// Position the side panel at the right edge of the screen, full height.
+/// In Auto attach mode, positioning is handled by the attach system instead.
 fn position_side_panel(
     app: &AppHandle,
     panel: &tauri::WebviewWindow,
 ) -> Result<(), String> {
+    // If Auto mode is active, the attach system will position the panel
+    let attach_state = app.state::<window_attach::WindowAttachState>();
+    if *attach_state.mode.lock().unwrap() == AttachMode::Auto {
+        // Let the attach system handle positioning after show
+        return Ok(());
+    }
+
     let state = app.state::<SidePanelState>();
     let panel_w = if *state.collapsed.lock().unwrap() {
         48.0

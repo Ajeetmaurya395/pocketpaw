@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Minus, X, ChevronsLeft, ChevronsRight } from "@lucide/svelte";
+  import { Minus, X, ChevronsLeft, ChevronsRight, Link, Unlink } from "@lucide/svelte";
   import ContextBar from "./ContextBar.svelte";
   import SidePanelChat from "./SidePanelChat.svelte";
   import { onMount, onDestroy } from "svelte";
@@ -10,11 +10,17 @@
     onSessionSwitch,
     onChatSync,
     onSettingsUpdate,
+    onAttachChanged,
+    onAttachError,
     disposeAllBridgeListeners,
+    type AttachMode,
+    type AttachChangedPayload,
   } from "$lib/tauri/bridge";
 
   let isDragging = $state(false);
   let collapsed = $state(false);
+  let attachMode = $state<AttachMode>("docked");
+  let isAttached = $state(false);
   let tokenUpdateUnsub: (() => void) | null = null;
 
   let panelBg = $derived(platformStore.hasNativeBlur ? "bg-transparent" : "bg-background");
@@ -81,6 +87,24 @@
         settingsStore.settings = settings;
       });
 
+      // Listen for window attach events
+      onAttachChanged((payload: AttachChangedPayload) => {
+        attachMode = payload.mode;
+        isAttached = payload.attached;
+      });
+
+      onAttachError((payload) => {
+        console.warn("Attach error:", payload.message);
+      });
+
+      // Check initial attach mode
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        attachMode = await invoke<AttachMode>("get_attach_mode");
+      } catch {
+        // Not in Tauri
+      }
+
       // Tell main window we're ready to receive state
       emitSidePanelReady();
     }
@@ -142,6 +166,17 @@
       // Not in Tauri
     }
   }
+
+  async function toggleAttach() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const newMode: AttachMode = attachMode === "auto" ? "docked" : "auto";
+      await invoke("set_attach_mode", { mode: newMode });
+      attachMode = newMode;
+    } catch {
+      // Not in Tauri
+    }
+  }
 </script>
 
 {#if collapsed}
@@ -189,6 +224,17 @@
         ></span>
       </div>
       <div class="flex items-center gap-0.5">
+        <button
+          onclick={toggleAttach}
+          class={`rounded p-1 transition-colors hover:bg-accent hover:text-foreground ${attachMode === "auto" ? "text-primary" : "text-muted-foreground/60"}`}
+          title={attachMode === "auto" ? "Unsnap from window" : "Snap to window"}
+        >
+          {#if attachMode === "auto"}
+            <Unlink class="h-3 w-3" />
+          {:else}
+            <Link class="h-3 w-3" />
+          {/if}
+        </button>
         <button
           onclick={collapse}
           class="rounded p-1 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"

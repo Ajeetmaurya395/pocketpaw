@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { chatStore, connectionStore, settingsStore, skillStore } from "$lib/stores";
-  import { X, Plus, ArrowUp, Globe, Brain, Wrench, Search } from "@lucide/svelte";
+  import { chatStore, connectionStore, settingsStore, skillStore, explorerStore } from "$lib/stores";
+  import { X, Plus, ArrowUp, Globe, Brain, Wrench, Search, FolderOpen, FileText } from "@lucide/svelte";
   import * as InputGroup from "$lib/components/ui/input-group";
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Separator } from "$lib/components/ui/separator";
@@ -48,6 +48,18 @@
   let skillCount = $derived(skillStore.skills.length);
   let planMode = $derived(settingsStore.settings?.plan_mode ?? false);
   let webSearch = $derived(settingsStore.settings?.smart_routing_enabled ?? false);
+
+  // File context indicator — show what explorer state will be sent with the message
+  let fileContextLabel = $derived.by(() => {
+    const file = explorerStore.openFile;
+    if (file) return file.name;
+    const dir = explorerStore.currentPath;
+    if (dir) {
+      const parts = dir.replace(/\\/g, "/").split("/").filter(Boolean);
+      return parts.at(-1) ?? dir;
+    }
+    return "";
+  });
 
   function handleSubmit() {
     const text = inputValue.trim();
@@ -221,6 +233,16 @@
               </InputGroup.Text>
             {/if}
           </div>
+          {#if fileContextLabel}
+            <InputGroup.Text class="text-muted-foreground">
+              {#if explorerStore.openFile}
+                <FileText class="mr-0.5 h-3 w-3" />
+              {:else}
+                <FolderOpen class="mr-0.5 h-3 w-3" />
+              {/if}
+              <span class="max-w-20 truncate">{fileContextLabel}</span>
+            </InputGroup.Text>
+          {/if}
           <Separator orientation="vertical" class="!h-4" />
           {#if isStreaming}
             <InputGroup.Button

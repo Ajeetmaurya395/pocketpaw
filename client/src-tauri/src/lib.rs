@@ -1,5 +1,8 @@
 mod commands;
 mod context;
+mod fs_commands;
+mod fs_thumbnail;
+mod fs_watcher;
 mod oauth;
 
 #[cfg(desktop)]
@@ -10,6 +13,8 @@ mod side_panel;
 mod tray;
 #[cfg(desktop)]
 mod vibrancy;
+#[cfg(desktop)]
+mod window_attach;
 
 use tauri::{Emitter, Manager};
 
@@ -41,11 +46,14 @@ pub fn run() {
             ));
     }
 
+    builder = builder.manage(fs_watcher::WatcherState::default());
+
     #[cfg(desktop)]
     {
         builder = builder
             .manage(quick_ask::PendingQuickAsk(std::sync::Mutex::new(None)))
             .manage(side_panel::SidePanelState::default())
+            .manage(window_attach::WindowAttachState::new())
             .manage(vibrancy::ActiveEffect(std::sync::Mutex::new(
                 vibrancy::NativeEffect::None,
             )));
@@ -60,6 +68,21 @@ pub fn run() {
             oauth::read_oauth_tokens,
             oauth::save_oauth_tokens,
             oauth::clear_oauth_tokens,
+            fs_commands::fs_read_dir,
+            fs_commands::fs_read_file_text,
+            fs_commands::fs_write_file,
+            fs_commands::fs_delete,
+            fs_commands::fs_rename,
+            fs_commands::fs_stat,
+            fs_commands::fs_create_dir,
+            fs_commands::fs_exists,
+            fs_commands::fs_read_file_base64,
+            fs_commands::fs_resolve_path,
+            fs_commands::fs_parent_dir,
+            fs_commands::fs_get_default_dirs,
+            fs_thumbnail::fs_thumbnail,
+            fs_watcher::fs_watch,
+            fs_watcher::fs_unwatch,
             #[cfg(desktop)]
             oauth::start_oauth_server,
             #[cfg(desktop)]
@@ -90,6 +113,14 @@ pub fn run() {
             vibrancy::get_native_effect,
             #[cfg(desktop)]
             vibrancy::set_vibrancy_theme,
+            #[cfg(desktop)]
+            window_attach::set_attach_mode,
+            #[cfg(desktop)]
+            window_attach::get_attach_mode,
+            #[cfg(desktop)]
+            window_attach::get_attach_info,
+            #[cfg(desktop)]
+            window_attach::detach_side_panel,
         ])
         .setup(|_app| {
             // Desktop-only: system tray + close-to-tray
@@ -113,6 +144,9 @@ pub fn run() {
                         vibrancy::apply_native_effect(&win, None);
                     }
                 }
+
+                // Start the window attach polling loop
+                window_attach::start_poll_loop(_app.handle().clone());
 
                 let window_clone = window.clone();
                 window.on_window_event(move |event| {

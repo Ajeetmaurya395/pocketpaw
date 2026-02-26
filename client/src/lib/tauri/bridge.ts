@@ -12,6 +12,8 @@ const EVENTS = {
   CHAT_SYNC: "pp:chat-sync",
   SETTINGS_UPDATED: "pp:settings-updated",
   SIDEPANEL_READY: "pp:sidepanel-ready",
+  ATTACH_CHANGED: "attach-changed",
+  ATTACH_ERROR: "attach-error",
 } as const;
 
 // -- Payload types -------------------------------------------------------------
@@ -24,6 +26,19 @@ export interface ChatSyncPayload {
   messages: ChatMessage[];
   streaming: boolean;
   streamingContent: string;
+}
+
+export type AttachMode = "auto" | "docked" | "disabled";
+
+export interface AttachChangedPayload {
+  mode: AttachMode;
+  attached: boolean;
+  app_name: string;
+  window_title: string;
+}
+
+export interface AttachErrorPayload {
+  message: string;
 }
 
 // -- Internal helpers ----------------------------------------------------------
@@ -97,6 +112,18 @@ export function onSidePanelReady(
   handler: () => void,
 ): Promise<UnlistenFn> {
   return listenEvent(EVENTS.SIDEPANEL_READY, handler);
+}
+
+export function onAttachChanged(
+  handler: (payload: AttachChangedPayload) => void,
+): Promise<UnlistenFn> {
+  return listenEvent(EVENTS.ATTACH_CHANGED, handler);
+}
+
+export function onAttachError(
+  handler: (payload: AttachErrorPayload) => void,
+): Promise<UnlistenFn> {
+  return listenEvent(EVENTS.ATTACH_ERROR, handler);
 }
 
 // -- Cleanup -------------------------------------------------------------------

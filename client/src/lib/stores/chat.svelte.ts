@@ -1,7 +1,8 @@
-import type { ChatMessage, MediaAttachment, WSEvent, PocketPawWebSocket } from "$lib/api";
+import type { ChatMessage, FileContext, MediaAttachment, WSEvent, PocketPawWebSocket } from "$lib/api";
 import { toast } from "svelte-sonner";
 import { connectionStore } from "./connection.svelte";
 import { sessionStore } from "./sessions.svelte";
+import { explorerStore } from "./explorer.svelte";
 
 class ChatStore {
   messages = $state<ChatMessage[]>([]);
@@ -14,6 +15,31 @@ class ChatStore {
 
   private unsubs: (() => void)[] = [];
   private abortController: AbortController | null = null;
+
+  /** Collect current file explorer context for the LLM. */
+  private getFileContext(): FileContext | undefined {
+    const dir = explorerStore.currentPath;
+    const file = explorerStore.openFile;
+    const selected = explorerStore.selectedFiles;
+
+    // Nothing to send if explorer is at home with nothing open
+    if (!dir && !file && selected.size === 0) return undefined;
+
+    const ctx: FileContext = {};
+    if (dir) ctx.current_dir = dir;
+    if (file) {
+      ctx.open_file = file.path;
+      ctx.open_file_name = file.name;
+      ctx.open_file_extension = file.extension;
+      ctx.open_file_size = file.size;
+    }
+    if (selected.size > 0) {
+      ctx.selected_files = [...selected];
+    }
+    const source = explorerStore.currentSource;
+    if (source !== "local") ctx.source = source;
+    return ctx;
+  }
 
   sendMessage(content: string, media?: MediaAttachment[]): void {
     // Push user message to the list
@@ -28,7 +54,7 @@ class ChatStore {
     // Clear any previous error
     this.error = null;
 
-    // Send via REST SSE stream
+    // Send via REST SSE stream with file context
     this.streamChat(content, media);
   }
 
@@ -130,6 +156,7 @@ class ChatStore {
     try {
       const client = connectionStore.getClient();
       const sessionId = sessionStore.activeSessionId ?? undefined;
+      const fileContext = this.getFileContext();
 
       await client.chatStream(
         content,
@@ -153,6 +180,7 @@ class ChatStore {
         media,
         sessionId,
         this.abortController.signal,
+        fileContext,
       );
 
       // If stream ended without an explicit stream_end event, finalize

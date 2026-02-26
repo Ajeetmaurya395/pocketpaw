@@ -5,6 +5,7 @@ import {
   type ChannelStatusMap,
   type ChannelTestResult,
   type ChatMessage,
+  type FileContext,
   type HealthErrorEntry,
   type HealthSummary,
   type IdentityFiles,
@@ -194,12 +195,15 @@ export class PocketPawClient {
     media?: MediaAttachment[],
     sessionId?: string,
     signal?: AbortSignal,
+    fileContext?: FileContext,
   ): Promise<void> {
     const url = `${this.apiBase}/chat/stream`;
+    const body: Record<string, unknown> = { content, media, session_id: sessionId };
+    if (fileContext) body.file_context = fileContext;
     const res = await fetch(url, {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ content, media, session_id: sessionId }),
+      body: JSON.stringify(body),
       signal,
     });
 
@@ -213,6 +217,7 @@ export class PocketPawClient {
 
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentEvent = "";
 
     while (true) {
       const { done, value } = await reader.read();
@@ -222,7 +227,6 @@ export class PocketPawClient {
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
-      let currentEvent = "";
       for (const line of lines) {
         if (line.startsWith("event: ")) {
           currentEvent = line.slice(7).trim();

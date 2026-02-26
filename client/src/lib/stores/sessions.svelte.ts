@@ -50,6 +50,7 @@ class SessionStore {
   }
 
   createNewSession(): void {
+    this.activeSessionId = null;
     chatStore.clearMessages();
 
     try {
@@ -58,7 +59,6 @@ class SessionStore {
       // new_session event will arrive with the new ID
     } catch {
       // Offline: just clear messages, no ID yet
-      this.activeSessionId = null;
     }
   }
 

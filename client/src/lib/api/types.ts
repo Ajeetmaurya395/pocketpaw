@@ -13,6 +13,18 @@ export interface MediaAttachment {
   mime_type?: string;
 }
 
+// -- File Context -----------------------------------------------------------
+
+export interface FileContext {
+  current_dir?: string;
+  open_file?: string;
+  open_file_name?: string;
+  open_file_extension?: string;
+  open_file_size?: number;
+  selected_files?: string[];
+  source?: string;
+}
+
 // -- Chat Messages ----------------------------------------------------------
 
 export interface ChatMessage {
