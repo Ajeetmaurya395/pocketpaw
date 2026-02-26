@@ -605,7 +605,9 @@
               { "label": "Approve Plan", "href": "/api/post-deep-work-approve", "method": "POST" },
               { "label": "Pause Project", "href": "/api/post-deep-work-pause", "method": "POST" },
               { "label": "Resume Project", "href": "/api/post-deep-work-resume", "method": "POST" },
-              { "label": "Skip Task", "href": "/api/post-deep-work-skip-task", "method": "POST" }
+              { "label": "Cancel Project", "href": "/api/post-deep-work-cancel", "method": "POST" },
+              { "label": "Skip Task", "href": "/api/post-deep-work-skip-task", "method": "POST" },
+              { "label": "Retry Task", "href": "/api/post-deep-work-retry-task", "method": "POST" }
             ]
           },
           {
