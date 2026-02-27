@@ -1,7 +1,9 @@
-import type { Session, WSEvent, PocketPawWebSocket } from "$lib/api";
+import type { Session } from "$lib/api";
 import { toast } from "svelte-sonner";
 import { connectionStore } from "./connection.svelte";
 import { chatStore } from "./chat.svelte";
+
+const STORAGE_KEY = "pocketpaw_active_session";
 
 class SessionStore {
   sessions = $state<Session[]>([]);
@@ -12,7 +14,28 @@ class SessionStore {
     this.sessions.find((s) => s.id === this.activeSessionId) ?? null,
   );
 
-  private unsubs: (() => void)[] = [];
+  /** Set the active session ID and persist to localStorage. */
+  setActiveSession(id: string | null): void {
+    this.activeSessionId = id;
+    try {
+      if (id) {
+        localStorage.setItem(STORAGE_KEY, id);
+      } else {
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {
+      // localStorage may be unavailable (e.g. private browsing)
+    }
+  }
+
+  /** Read the persisted session ID from localStorage (returns null if absent). */
+  private getSavedSessionId(): string | null {
+    try {
+      return localStorage.getItem(STORAGE_KEY);
+    } catch {
+      return null;
+    }
+  }
 
   async loadSessions(limit = 50): Promise<void> {
     this.isLoading = true;
@@ -20,6 +43,22 @@ class SessionStore {
       const client = connectionStore.getClient();
       const res = await client.listSessions(limit);
       this.sessions = res.sessions;
+
+      // Restore the last active session on page load
+      if (!this.activeSessionId && this.sessions.length > 0) {
+        const savedId = this.getSavedSessionId();
+        const target = savedId && this.sessions.find((s) => s.id === savedId)
+          ? savedId
+          : this.sessions[0].id;
+        this.activeSessionId = target;
+        try {
+          const history = await client.getSessionHistory(target);
+          chatStore.loadHistory(history);
+        } catch {
+          // Session might be empty or deleted — ignore
+        }
+        this.setActiveSession(target);
+      }
     } catch (err) {
       console.error("[SessionStore] Failed to load sessions:", err);
       toast.error("Failed to load sessions");
@@ -31,34 +70,37 @@ class SessionStore {
   async switchSession(sessionId: string): Promise<void> {
     if (sessionId === this.activeSessionId) return;
 
-    this.activeSessionId = sessionId;
+    this.setActiveSession(sessionId);
 
     try {
-      const ws = connectionStore.getWebSocket();
-      ws.switchSession(sessionId);
-      // session_history event will arrive via WS and chatStore will handle it
-    } catch {
-      // Fallback: load history via REST
-      try {
-        const client = connectionStore.getClient();
-        const history = await client.getSessionHistory(sessionId);
-        chatStore.loadHistory(history);
-      } catch (err) {
-        console.error("[SessionStore] Failed to load session history:", err);
-      }
+      const client = connectionStore.getClient();
+      const history = await client.getSessionHistory(sessionId);
+      chatStore.loadHistory(history);
+    } catch (err) {
+      console.error("[SessionStore] Failed to load session history:", err);
     }
   }
 
-  createNewSession(): void {
-    this.activeSessionId = null;
+  async createNewSession(): Promise<void> {
     chatStore.clearMessages();
 
     try {
-      const ws = connectionStore.getWebSocket();
-      ws.newSession();
-      // new_session event will arrive with the new ID
+      const client = connectionStore.getClient();
+      const res = await client.createSession();
+      this.setActiveSession(res.id);
+
+      // Prepend a placeholder session entry
+      const newSession: Session = {
+        id: res.id,
+        title: res.title,
+        channel: "websocket",
+        last_activity: new Date().toISOString(),
+        message_count: 0,
+      };
+      this.sessions = [newSession, ...this.sessions];
     } catch {
-      // Offline: just clear messages, no ID yet
+      // Fallback: clear session ID — first chat will auto-create via stream_end.session_id
+      this.setActiveSession(null);
     }
   }
 
@@ -75,7 +117,7 @@ class SessionStore {
         if (next) {
           await this.switchSession(next.id);
         } else {
-          this.activeSessionId = null;
+          this.setActiveSession(null);
           chatStore.clearMessages();
         }
       }
@@ -117,43 +159,6 @@ class SessionStore {
   ): Promise<string> {
     const client = connectionStore.getClient();
     return client.exportSession(sessionId, format);
-  }
-
-  bindEvents(ws: PocketPawWebSocket): void {
-    this.disposeEvents();
-
-    // New session created
-    this.unsubs.push(
-      ws.on("new_session", (event: WSEvent) => {
-        if (event.type !== "new_session") return;
-        this.activeSessionId = event.id;
-
-        // Prepend a placeholder session entry
-        const newSession: Session = {
-          id: event.id,
-          title: "New Chat",
-          channel: "websocket",
-          last_activity: new Date().toISOString(),
-          message_count: 0,
-        };
-        this.sessions = [newSession, ...this.sessions];
-      }),
-    );
-
-    // Connection established — set initial session ID
-    this.unsubs.push(
-      ws.on("connection_info", (event: WSEvent) => {
-        if (event.type !== "connection_info") return;
-        if (!this.activeSessionId) {
-          this.activeSessionId = event.id;
-        }
-      }),
-    );
-  }
-
-  disposeEvents(): void {
-    for (const unsub of this.unsubs) unsub();
-    this.unsubs = [];
   }
 }
 

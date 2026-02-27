@@ -4,7 +4,6 @@ import { BACKEND_URL } from "$lib/api/config";
 class ConnectionStore {
   status = $state<ConnectionState>("disconnected");
   token = $state<string | null>(null);
-  sessionId = $state<string | null>(null);
   error = $state<string | null>(null);
   backendUrl = $state(BACKEND_URL);
 
@@ -46,13 +45,6 @@ class ConnectionStore {
       }
     });
 
-    // Track session ID from connection_info
-    this.ws.on("connection_info", (event) => {
-      if (event.type === "connection_info") {
-        this.sessionId = event.id;
-      }
-    });
-
     // Track errors
     this.ws.on("error", (event) => {
       if (event.type === "error") {
@@ -71,7 +63,6 @@ class ConnectionStore {
     this.ws = null;
     this.client = null;
     this.status = "disconnected";
-    this.sessionId = null;
   }
 
   getClient(): PocketPawClient {

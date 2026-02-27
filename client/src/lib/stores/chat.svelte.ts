@@ -1,19 +1,33 @@
-import type { ChatMessage, FileContext, MediaAttachment, WSEvent, PocketPawWebSocket } from "$lib/api";
+import type { ChatMessage, FileContext, MediaAttachment } from "$lib/api";
 import { toast } from "svelte-sonner";
 import { connectionStore } from "./connection.svelte";
 import { sessionStore } from "./sessions.svelte";
 import { explorerStore } from "./explorer.svelte";
+import { activityStore } from "./activity.svelte";
+
+function humanizeToolName(tool: string): string {
+  const lower = tool.toLowerCase();
+  if (lower.includes("bash") || lower.includes("command") || lower.includes("shell"))
+    return "Running command...";
+  if (lower.includes("read") || lower.includes("cat")) return "Reading file...";
+  if (lower.includes("write") || lower.includes("edit")) return "Editing file...";
+  if (lower.includes("grep") || lower.includes("search") || lower.includes("glob"))
+    return "Searching code...";
+  if (lower.includes("browser") || lower.includes("navigate")) return "Browsing web...";
+  if (lower.includes("list") || lower.includes("ls")) return "Listing files...";
+  return `Running ${tool}...`;
+}
 
 class ChatStore {
   messages = $state<ChatMessage[]>([]);
   isStreaming = $state(false);
   streamingContent = $state("");
+  streamingStatus = $state<string | null>(null);
   error = $state<string | null>(null);
 
   isEmpty = $derived(this.messages.length === 0);
   lastMessage = $derived(this.messages.at(-1) ?? null);
 
-  private unsubs: (() => void)[] = [];
   private abortController: AbortController | null = null;
 
   /** Collect current file explorer context for the LLM. */
@@ -104,51 +118,45 @@ class ChatStore {
   }
 
   loadHistory(messages: ChatMessage[]): void {
+    // Abort any in-flight stream so its callbacks don't clobber the loaded history
+    this.abortController?.abort();
+    this.abortController = null;
+
     this.messages = messages;
     this.isStreaming = false;
     this.streamingContent = "";
+    this.streamingStatus = null;
     this.error = null;
+
+    activityStore.isAgentWorking = false;
+    activityStore.sseActive = false;
   }
 
   clearMessages(): void {
+    // Abort any in-flight stream so its callbacks don't clobber the new state
+    this.abortController?.abort();
+    this.abortController = null;
+
     this.messages = [];
     this.isStreaming = false;
     this.streamingContent = "";
+    this.streamingStatus = null;
     this.error = null;
-  }
 
-  bindEvents(ws: PocketPawWebSocket): void {
-    this.disposeEvents();
-
-    // Keep WS error listener for general connection errors
-    this.unsubs.push(
-      ws.on("error", (event: WSEvent) => {
-        if (event.type !== "error") return;
-        this.error = event.content;
-        toast.error(event.content || "An error occurred");
-        if (this.isStreaming) {
-          this.finalizeStream();
-        }
-      }),
-    );
-
-    // Keep session_history listener (used when switching sessions via WS)
-    this.unsubs.push(
-      ws.on("session_history", (event: WSEvent) => {
-        if (event.type !== "session_history") return;
-        this.loadHistory(event.messages);
-      }),
-    );
-  }
-
-  disposeEvents(): void {
-    for (const unsub of this.unsubs) unsub();
-    this.unsubs = [];
+    // Reset activity store in case SSE was active
+    activityStore.isAgentWorking = false;
+    activityStore.sseActive = false;
   }
 
   private async streamChat(content: string, media?: MediaAttachment[]): Promise<void> {
     this.isStreaming = true;
     this.streamingContent = "";
+    this.streamingStatus = "Thinking...";
+
+    // Signal activity store that SSE is driving events
+    activityStore.isAgentWorking = true;
+    activityStore.sseActive = true;
+    activityStore.tokenUsage = null;
 
     this.abortController?.abort();
     this.abortController = new AbortController();
@@ -162,13 +170,40 @@ class ChatStore {
         content,
         {
           onChunk: (data) => {
+            // Clear status on first content chunk
+            if (this.streamingStatus) this.streamingStatus = null;
             this.streamingContent += data.content;
           },
+          onThinking: (data) => {
+            this.streamingStatus = "Thinking...";
+            activityStore.pushSSEEvent("thinking", { content: data.content });
+          },
+          onToolStart: (data) => {
+            this.streamingStatus = humanizeToolName(data.tool);
+            activityStore.pushSSEEvent("tool_start", {
+              tool: data.tool,
+              input: data.input,
+            });
+          },
+          onToolResult: (data) => {
+            this.streamingStatus = "Thinking...";
+            activityStore.pushSSEEvent("tool_result", {
+              tool: data.tool,
+              output: data.output,
+            });
+          },
           onStreamEnd: (data) => {
+            // Capture token usage before finalizeStream resets sseActive
+            if (data.usage) {
+              activityStore.tokenUsage = {
+                input: data.usage.input_tokens,
+                output: data.usage.output_tokens,
+              };
+            }
             this.finalizeStream();
             // Update active session ID if the backend returned one (e.g. new session)
             if (data.session_id && data.session_id !== sessionStore.activeSessionId) {
-              sessionStore.activeSessionId = data.session_id;
+              sessionStore.setActiveSession(data.session_id);
             }
           },
           onError: (data) => {
@@ -190,6 +225,11 @@ class ChatStore {
     } catch (err: unknown) {
       // AbortError is expected when user stops generation
       if (err instanceof DOMException && err.name === "AbortError") {
+        // Clean up activity store flags (finalizeStream is NOT called here
+        // because stopGeneration() already calls it; this handles the case
+        // where a new streamChat aborted the previous one).
+        activityStore.sseActive = false;
+        activityStore.isAgentWorking = false;
         return;
       }
       const message = err instanceof Error ? err.message : "Failed to send message";
@@ -213,6 +253,11 @@ class ChatStore {
     }
     this.isStreaming = false;
     this.streamingContent = "";
+    this.streamingStatus = null;
+
+    // Reset activity store SSE state
+    activityStore.isAgentWorking = false;
+    activityStore.sseActive = false;
   }
 }
 

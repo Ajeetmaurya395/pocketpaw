@@ -271,6 +271,10 @@ export class PocketPawClient {
   // Sessions
   // ---------------------------------------------------------------------------
 
+  async createSession(): Promise<{ id: string; title: string }> {
+    return this.post("/sessions");
+  }
+
   async listSessions(limit = 50): Promise<SessionListResponse> {
     return this.get<SessionListResponse>(`/sessions?limit=${limit}`);
   }

@@ -12,18 +12,13 @@ export { connectionStore, chatStore, sessionStore, settingsStore, activityStore,
 export type { ActivityEntry } from "./activity.svelte";
 
 // Master initialization — called once on app startup after obtaining a token.
-// Sets up clients, binds events, and kicks off background data loading.
-// Awaits the session-cookie login before connecting WebSocket.
+// Sets up REST client, connects WebSocket (push-only), and loads initial data.
 export async function initializeStores(token: string, baseUrl?: string, wsToken?: string): Promise<void> {
   // Create REST client, obtain session cookie, then connect WebSocket
   await connectionStore.initialize(token, baseUrl, wsToken);
-  const ws = connectionStore.getWebSocket();
 
-  // Wire WebSocket events to stores
-  chatStore.bindEvents(ws);
-  sessionStore.bindEvents(ws);
-  settingsStore.bindEvents(ws);
-  activityStore.bindEvents(ws);
+  // No bindEvents — stores no longer depend on WS for request-response flows.
+  // WS is kept for push-only events (notifications, reminders, health, skills).
 
   // Load initial data via REST in background (don't block UI)
   Promise.allSettled([

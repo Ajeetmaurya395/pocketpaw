@@ -23,7 +23,6 @@ export class PocketPawWebSocket {
   private intentionalClose = false;
 
   state: ConnectionState = "disconnected";
-  sessionId: string | null = null;
 
   private stateListeners = new Set<(state: ConnectionState) => void>();
 
@@ -119,46 +118,6 @@ export class PocketPawWebSocket {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // Convenience methods
-  // ---------------------------------------------------------------------------
-
-  chat(content: string, media?: import("./types").MediaAttachment[]): void {
-    this.send({ action: "chat", message: content, media });
-  }
-
-  stopGeneration(): void {
-    this.send({ action: "stop" });
-  }
-
-  newSession(): void {
-    this.send({ action: "new_session" });
-  }
-
-  switchSession(sessionId: string): void {
-    this.send({ action: "switch_session", session_id: sessionId });
-  }
-
-  resumeSession(): void {
-    this.send({ action: "resume_session" });
-  }
-
-  requestSettings(): void {
-    this.send({ action: "get_settings" });
-  }
-
-  updateSettings(settings: Record<string, unknown>): void {
-    this.send({ action: "settings", ...settings });
-  }
-
-  saveApiKey(provider: string, key: string): void {
-    this.send({ action: "save_api_key", provider, key });
-  }
-
-  browseFiles(path: string, context?: string): void {
-    this.send({ action: "file_browse", path, context });
-  }
-
   reconnectWithToken(token: string): void {
     this.token = token;
     this.disconnect();
@@ -170,14 +129,6 @@ export class PocketPawWebSocket {
   // ---------------------------------------------------------------------------
 
   private handleEvent(event: WSEvent): void {
-    // Track session ID from connection_info
-    if (event.type === "connection_info" && "id" in event) {
-      this.sessionId = event.id;
-    }
-    if (event.type === "new_session" && "id" in event) {
-      this.sessionId = event.id;
-    }
-
     // Dispatch to typed listeners
     const typed = this.listeners.get(event.type);
     if (typed) {

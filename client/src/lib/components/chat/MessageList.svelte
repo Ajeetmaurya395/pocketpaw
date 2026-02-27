@@ -3,7 +3,6 @@
   import { ArrowDown } from "@lucide/svelte";
   import ChatMessage from "./ChatMessage.svelte";
   import StreamingMessage from "./StreamingMessage.svelte";
-  import ActivityPanel from "$lib/components/activity/ActivityPanel.svelte";
 
   let messages = $derived(chatStore.messages);
   let isStreaming = $derived(chatStore.isStreaming);
@@ -41,11 +40,12 @@
     autoScroll = true;
   }
 
-  // Auto-scroll when messages change or streaming content updates
+  // Auto-scroll when messages change or streaming content/status updates
   $effect(() => {
     // Touch reactive dependencies
     messages.length;
     chatStore.streamingContent;
+    chatStore.streamingStatus;
 
     if (autoScroll && scrollEl) {
       // Use microtask to scroll after DOM update
@@ -74,8 +74,6 @@
       {#if isStreaming}
         <StreamingMessage />
       {/if}
-
-      <ActivityPanel />
     </div>
   </div>
 

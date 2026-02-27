@@ -85,7 +85,7 @@
       </div>
     {:else}
       <!-- Desktop: hover overlay -->
-      <div class="absolute -right-8 top-0 flex flex-col gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div class=" flex  gap-1 ">
         <button
           onclick={copyContent}
           class="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"

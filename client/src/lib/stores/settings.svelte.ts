@@ -1,4 +1,4 @@
-import type { Settings, WSEvent, PocketPawWebSocket } from "$lib/api";
+import type { Settings } from "$lib/api";
 import { connectionStore } from "./connection.svelte";
 
 class SettingsStore {
@@ -20,8 +20,6 @@ class SettingsStore {
       default: return "";
     }
   });
-
-  private unsubs: (() => void)[] = [];
 
   async load(): Promise<void> {
     this.isLoading = true;
@@ -49,30 +47,23 @@ class SettingsStore {
     }
   }
 
-  saveApiKey(provider: string, key: string): void {
+  async saveApiKey(provider: string, key: string): Promise<void> {
+    // Map provider display names to settings field names
+    const providerFieldMap: Record<string, string> = {
+      anthropic: "anthropic_api_key",
+      openai: "openai_api_key",
+      google: "google_api_key",
+      gemini: "google_api_key",
+      ollama: "ollama_host",
+    };
+    const fieldName = providerFieldMap[provider.toLowerCase()] ?? `${provider.toLowerCase()}_api_key`;
     try {
-      const ws = connectionStore.getWebSocket();
-      ws.saveApiKey(provider, key);
+      await this.update({ [fieldName]: key } as Partial<Settings>);
+      await this.load();
     } catch (err) {
       console.error("[SettingsStore] Failed to save API key:", err);
+      throw err;
     }
-  }
-
-  bindEvents(ws: PocketPawWebSocket): void {
-    this.disposeEvents();
-
-    // Settings pushed from server (e.g., after save_api_key)
-    this.unsubs.push(
-      ws.on("settings", (event: WSEvent) => {
-        if (event.type !== "settings") return;
-        this.settings = event.content;
-      }),
-    );
-  }
-
-  disposeEvents(): void {
-    for (const unsub of this.unsubs) unsub();
-    this.unsubs = [];
   }
 }
 

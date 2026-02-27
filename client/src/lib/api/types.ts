@@ -343,71 +343,14 @@ export interface TokenUsage {
 }
 
 // -- WebSocket Actions (client → server) ------------------------------------
+// WS is now push-only. Only authenticate and ping are sent from the client.
 
 export type WSAction =
-  | { action: "chat"; message: string; media?: MediaAttachment[] }
-  | { action: "stop" }
-  | { action: "new_session" }
-  | { action: "switch_session"; session_id: string }
-  | { action: "resume_session" }
-  | { action: "get_settings" }
-  | { action: "settings"; [key: string]: unknown }
-  | { action: "save_api_key"; provider: string; key: string }
   | { action: "authenticate"; token: string }
-  | { action: "tool"; tool: string; path?: string }
-  | { action: "file_browse"; path: string; context?: string };
+  | { action: "ping" };
 
 // -- WebSocket Events (server → client) -------------------------------------
-
-export interface WSConnectionInfo {
-  type: "connection_info";
-  content: string;
-  id: string;
-}
-
-export interface WSSessionHistory {
-  type: "session_history";
-  session_id: string;
-  messages: ChatMessage[];
-}
-
-export interface WSNewSession {
-  type: "new_session";
-  id: string;
-}
-
-export interface WSMessage {
-  type: "message";
-  content: string;
-  is_stream_chunk?: boolean;
-  metadata?: Record<string, unknown>;
-}
-
-export interface WSStreamStart {
-  type: "stream_start";
-}
-
-export interface WSStreamEnd {
-  type: "stream_end";
-  media?: string[];
-  usage?: TokenUsage;
-}
-
-export interface WSSystemEvent {
-  type: "system_event";
-  event_type:
-    | "tool_start"
-    | "tool_result"
-    | "thinking"
-    | "thinking_done"
-    | "error";
-  data: Record<string, unknown>;
-}
-
-export interface WSSettings {
-  type: "settings";
-  content: Settings;
-}
+// WS now carries only push events — notifications, health, reminders, skills.
 
 export interface WSNotification {
   type: "notification";
@@ -417,13 +360,6 @@ export interface WSNotification {
 export interface WSError {
   type: "error";
   content: string;
-}
-
-export interface WSFiles {
-  type: "files";
-  path: string;
-  files: FileEntry[];
-  error?: string;
 }
 
 export interface WSHealthUpdate {
@@ -452,17 +388,8 @@ export interface WSSkills {
 }
 
 export type WSEvent =
-  | WSConnectionInfo
-  | WSSessionHistory
-  | WSNewSession
-  | WSMessage
-  | WSStreamStart
-  | WSStreamEnd
-  | WSSystemEvent
-  | WSSettings
   | WSNotification
   | WSError
-  | WSFiles
   | WSHealthUpdate
   | WSReminders
   | WSReminderAdded
