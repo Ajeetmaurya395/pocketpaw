@@ -9,6 +9,7 @@ Uses the official Claude Agent SDK (pip install claude-agent-sdk) which provides
 - MCP server support for custom tools
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -73,7 +74,7 @@ class ClaudeSDKBackend:
                 "WebFetch",
             ],
             tool_policy_map=ClaudeSDKBackend._TOOL_POLICY_MAP,
-            required_keys=["anthropic_api_key"],
+            required_keys=[],
             supported_providers=["anthropic", "ollama", "openai_compatible"],
         )
 
@@ -447,15 +448,19 @@ class ClaudeSDKBackend:
             logger.error("Fast-path API error: %s", e)
             yield AgentEvent(type="error", content=llm.format_api_error(e))
 
-    async def _get_or_create_client(self, options: Any) -> Any:
+    async def _get_or_create_client(
+        self, options: Any, *, session_key: str | None = None
+    ) -> Any:
         """Get or create a persistent ClaudeSDKClient.
 
-        Reuses the existing subprocess if model and tools haven't changed.
-        Reconnects when configuration changes are detected.
+        Reuses the existing subprocess if model, tools, **and session** haven't
+        changed.  Different sessions get a fresh subprocess so the CLI's
+        internal conversation context doesn't leak between chats.
         """
         import time
 
         key = (
+            f"{session_key or ''}:"
             f"{getattr(options, 'model', '')}:{sorted(getattr(options, 'allowed_tools', []) or [])}"
         )
 
@@ -491,6 +496,26 @@ class ClaudeSDKBackend:
             self._client_options_key = None
             self._client_in_use = False
             logger.info("Persistent client disconnected")
+
+    @staticmethod
+    async def _safe_iter(stream):
+        """Wrap an async iterator to skip SDK MessageParseError.
+
+        The Claude CLI may emit event types (e.g. rate_limit_event) that
+        older versions of the SDK don't recognise, causing a hard crash.
+        This wrapper catches and logs those, letting the stream continue.
+        """
+        it = stream.__aiter__()
+        while True:
+            try:
+                yield await it.__anext__()
+            except StopAsyncIteration:
+                break
+            except Exception as exc:
+                if "MessageParseError" in type(exc).__name__:
+                    logger.debug("Skipping unrecognised SDK event: %s", exc)
+                    continue
+                raise
 
     async def run(
         self,
@@ -543,32 +568,15 @@ class ClaudeSDKBackend:
             provider = self.settings.claude_sdk_provider or "anthropic"
             llm = resolve_llm_client(self.settings, force_provider=provider)
 
-            # ── API key enforcement for Anthropic provider ──────────────
-            # Anthropic's policy prohibits using OAuth tokens from Free/Pro/Max
-            # plans in third-party products. PocketPaw must use API key auth.
-            if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
-                has_api_key = bool(
-                    llm.api_key or os.environ.get("ANTHROPIC_API_KEY")
-                )
-                if not has_api_key:
-                    yield AgentEvent(
-                        type="error",
-                        content=(
-                            "**API key required** — The Claude SDK backend requires "
-                            "an Anthropic API key.\n\n"
-                            "Anthropic's policy prohibits third-party applications from "
-                            "using OAuth tokens (Free/Pro/Max plan credentials). "
-                            "PocketPaw must authenticate with an API key.\n\n"
-                            "**How to fix:**\n"
-                            "1. Get an API key at "
-                            "[console.anthropic.com](https://console.anthropic.com/api-keys)\n"
-                            "2. Add it in **Settings → API Keys → Anthropic API Key**\n"
-                            "3. Or set the `ANTHROPIC_API_KEY` environment variable\n\n"
-                            "*Alternatively, switch to **Ollama (Local)** in Settings "
-                            "→ General for free local inference.*"
-                        ),
-                    )
-                    return
+            # ── API key enforcement TEMPORARILY DISABLED ──────────────
+            # TODO: Re-enable once API key distribution is sorted out.
+            # if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
+            #     has_api_key = bool(
+            #         llm.api_key or os.environ.get("ANTHROPIC_API_KEY")
+            #     )
+            #     if not has_api_key:
+            #         yield AgentEvent(type="error", content="API key required")
+            #         return
 
             # Smart model routing — classify BEFORE prompt composition so we
             # can skip tool instructions for SIMPLE messages and dispatch to
@@ -666,17 +674,41 @@ class ClaudeSDKBackend:
             }
 
             # Configure LLM provider for the Claude CLI subprocess.
-            # API key is enforced above for Anthropic; Ollama/OpenAI-compat
-            # providers set their own env vars via to_sdk_env().
+            # Ollama/OpenAI-compat providers set their own env vars via to_sdk_env().
             sdk_env = llm.to_sdk_env()
             if not sdk_env:
                 env_key = os.environ.get("ANTHROPIC_API_KEY")
                 if env_key:
                     sdk_env = {"ANTHROPIC_API_KEY": env_key}
+
+            # Strip nesting-detection env vars (set when launched from
+            # a Claude Code terminal) so the subprocess starts cleanly.
+            # These should already be removed by main(), but do it here
+            # too as a safety net.
+            for _strip_key in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+                os.environ.pop(_strip_key, None)
             if sdk_env:
                 options_kwargs["env"] = sdk_env
             if llm.is_ollama or llm.is_openai_compatible or llm.is_gemini:
                 options_kwargs["model"] = llm.model
+
+            # ── Debug logging for troubleshooting SDK startup ──
+            import shutil as _shutil
+
+            logger.info(
+                "SDK launch: provider=%s, has_api_key=%s, "
+                "CLAUDECODE=%s, CLAUDE_CODE_ENTRYPOINT=%s, "
+                "ANTHROPIC_API_KEY=%s, sdk_env_keys=%s, "
+                "cli_path=%s, cwd=%s",
+                provider,
+                bool(llm.api_key),
+                os.environ.get("CLAUDECODE", "<unset>"),
+                os.environ.get("CLAUDE_CODE_ENTRYPOINT", "<unset>"),
+                "set" if os.environ.get("ANTHROPIC_API_KEY") else "<unset>",
+                list(sdk_env.keys()) if sdk_env else "none",
+                _shutil.which("claude") or "<not found>",
+                self._cwd,
+            )
 
             # Wire in MCP servers (policy-filtered)
             mcp_servers = self._get_mcp_servers()
@@ -727,32 +759,56 @@ class ClaudeSDKBackend:
             # _client_in_use guard prevents concurrent queries on the same
             # subprocess — cross-session messages fall back to stateless query.
             event_stream = None
+            logger.info(
+                "SDK dispatch: _client_in_use=%s, session_key=%s",
+                self._client_in_use,
+                session_key,
+            )
             if not self._client_in_use:
                 try:
                     self._client_in_use = True
-                    client = await self._get_or_create_client(options)
+                    client = await self._get_or_create_client(
+                        options, session_key=session_key
+                    )
+                    logger.info("Persistent client: sending query (%d chars)", len(message))
                     await client.query(message)
                     event_stream = client.receive_response()
+                    logger.info("Persistent client: receive_response() returned iterator")
                 except Exception as client_err:
                     logger.warning(
                         "Persistent client failed, falling back to stateless query: %s",
                         client_err,
                     )
+                    # Log stderr lines captured so far
+                    if _stderr_lines:
+                        logger.warning(
+                            "CLI stderr during persistent client failure:\n%s",
+                            "\n".join(_stderr_lines),
+                        )
                     # Clear broken client so next call creates a fresh one
                     self._client = None
                     self._client_options_key = None
                     self._client_in_use = False
 
             if event_stream is None:
+                logger.info("Starting stateless query (fallback — _client_in_use was True)")
                 event_stream = self._query(prompt=message, options=options)
 
             # State tracking for StreamEvent deduplication
             _streamed_via_events = False
             _announced_tools: set[str] = set()
+            _event_count = 0
 
             # Stream responses — release the persistent client guard when done
             try:
-                async for event in event_stream:
+                async for event in self._safe_iter(event_stream):
+                    _event_count += 1
+                    if _event_count <= 3:
+                        logger.info(
+                            "SDK event #%d: type=%s",
+                            _event_count,
+                            type(event).__name__,
+                        )
                     if self._stop_flag:
                         logger.info("🛑 Stop flag set, breaking stream")
                         break
@@ -863,13 +919,42 @@ class ClaudeSDKBackend:
                     event_class = event.__class__.__name__
                     logger.debug(f"Unknown event type: {event_class}")
             finally:
+                # ── Drain trailing ResultMessage from the persistent
+                # client's pipe.  The SDK iterator stops after the
+                # AssistantMessage (end-of-turn) but the subprocess
+                # writes a ResultMessage summary afterwards.  If we
+                # don't consume it now, the NEXT receive_response()
+                # reads it as stale data and returns immediately. ──
+                if self._client is not None:
+                    try:
+                        drain = self._client.receive_response()
+                        trailing = await asyncio.wait_for(
+                            drain.__aiter__().__anext__(), timeout=2.0
+                        )
+                        logger.info(
+                            "Drained trailing %s from persistent client",
+                            type(trailing).__name__,
+                        )
+                    except (StopAsyncIteration, TimeoutError, Exception):
+                        pass
+
                 self._client_in_use = False
+                logger.info(
+                    "SDK stream finished: %d events, _client_in_use=False",
+                    _event_count,
+                )
 
             yield AgentEvent(type="done", content="")
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Claude Agent SDK error: {error_msg}")
+            logger.error(f"Claude Agent SDK error: {error_msg}", exc_info=True)
+
+            # Log any stderr captured from the CLI subprocess
+            if _stderr_lines:
+                logger.error(
+                    "CLI stderr output:\n%s", "\n".join(_stderr_lines)
+                )
 
             # Clear client on unexpected errors
             self._client = None

@@ -56,4 +56,22 @@ async def update_settings(request: Request):
         settings.save()
         get_settings.cache_clear()
 
+    # Apply runtime side-effects so changes take effect without restart
+    try:
+        from pocketpaw.dashboard_state import agent_loop
+
+        agent_loop.reset_router()
+        logger.info("Agent router reset after settings update")
+    except Exception:
+        logger.debug("Could not reset agent router", exc_info=True)
+
+    try:
+        from pocketpaw.memory import get_memory_manager
+
+        manager = get_memory_manager()
+        if hasattr(manager, "reload"):
+            await manager.reload()
+    except Exception:
+        logger.debug("Could not reload memory manager", exc_info=True)
+
     return {"status": "ok"}
