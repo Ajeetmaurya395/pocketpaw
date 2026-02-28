@@ -2,6 +2,7 @@
   import { Plus, Search, PanelRight } from "@lucide/svelte";
   import { sessionStore, uiStore, platformStore } from "$lib/stores";
   import * as Tooltip from "$lib/components/ui/tooltip";
+  import NotificationBell from "./NotificationBell.svelte";
 
   function newChat() {
     sessionStore.createNewSession();
@@ -53,6 +54,8 @@
       <p>Search <kbd class="ml-1 text-[10px] text-muted-foreground">⌘K</kbd></p>
     </Tooltip.Content>
   </Tooltip.Root>
+
+  <NotificationBell />
 
   <Tooltip.Root>
     <Tooltip.Trigger>

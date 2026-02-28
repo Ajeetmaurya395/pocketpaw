@@ -32,6 +32,7 @@ import {
   type Skill,
   type VersionInfo,
 } from "./types";
+import type { TaskStatus, TaskPriority, DocumentType } from "$lib/types/pawkit";
 import { BACKEND_URL, API_PREFIX } from "./config";
 
 export class PocketPawClient {
@@ -125,6 +126,60 @@ export class PocketPawClient {
 
   private del<T>(path: string, body?: unknown) {
     return this.request<T>("DELETE", path, body);
+  }
+
+  /** Like request(), but targets /api/mission-control instead of /api/v1 */
+  private async mcRequest<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const url = `${this.baseUrl}/api/mission-control${path}`;
+    const res = await fetch(url, {
+      method,
+      headers: this.headers(),
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      let detail: string | undefined;
+      try {
+        const json = await res.json();
+        detail = json.detail ?? json.message ?? JSON.stringify(json);
+      } catch {
+        detail = await res.text().catch(() => undefined);
+      }
+      throw new ApiError(res.status, `${method} /mc${path} failed: ${res.status}`, detail);
+    }
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  }
+
+  /** Like request(), but targets /api/deep-work instead of /api/v1 */
+  private async dwRequest<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const url = `${this.baseUrl}/api/deep-work${path}`;
+    const res = await fetch(url, {
+      method,
+      headers: this.headers(),
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      let detail: string | undefined;
+      try {
+        const json = await res.json();
+        detail = json.detail ?? json.message ?? JSON.stringify(json);
+      } catch {
+        detail = await res.text().catch(() => undefined);
+      }
+      throw new ApiError(res.status, `${method} /dw${path} failed: ${res.status}`, detail);
+    }
+    const text = await res.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
   }
 
   // ---------------------------------------------------------------------------
@@ -612,5 +667,268 @@ export class PocketPawClient {
 
   async browseFiles(path: string): Promise<{ path: string; files: import("./types").FileEntry[] }> {
     return this.get(`/files/browse?path=${encodeURIComponent(path)}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Kits (Command Centers)
+  // ---------------------------------------------------------------------------
+
+  async listKits(): Promise<import("$lib/types/pawkit").InstalledKit[]> {
+    const res = await this.get<{ kits: import("$lib/types/pawkit").InstalledKit[] }>("/kits");
+    return res.kits;
+  }
+
+  async getKit(kitId: string): Promise<import("$lib/types/pawkit").InstalledKit> {
+    const res = await this.get<{ kit: import("$lib/types/pawkit").InstalledKit }>(
+      `/kits/${encodeURIComponent(kitId)}`,
+    );
+    return res.kit;
+  }
+
+  async installKit(yaml: string): Promise<{ id: string }> {
+    return this.post("/kits/install", { yaml });
+  }
+
+  async removeKit(kitId: string): Promise<void> {
+    await this.del(`/kits/${encodeURIComponent(kitId)}`);
+  }
+
+  async getKitData(kitId: string): Promise<Record<string, unknown>> {
+    const res = await this.get<{ data: Record<string, unknown> }>(
+      `/kits/${encodeURIComponent(kitId)}/data`,
+    );
+    return res.data;
+  }
+
+  async activateKit(kitId: string): Promise<void> {
+    await this.post(`/kits/${encodeURIComponent(kitId)}/activate`);
+  }
+
+  async listKitCatalog(): Promise<import("$lib/types/pawkit").KitCatalogEntry[]> {
+    const res = await this.get<{ catalog: import("$lib/types/pawkit").KitCatalogEntry[] }>(
+      "/kits/catalog",
+    );
+    return res.catalog;
+  }
+
+  async installCatalogKit(
+    kitId: string,
+  ): Promise<{ id: string; kit: import("$lib/types/pawkit").InstalledKit; activated: boolean }> {
+    return this.post(`/kits/catalog/${encodeURIComponent(kitId)}/install`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Mission Control
+  // ---------------------------------------------------------------------------
+
+  async mcCreateTask(
+    title: string,
+    priority?: TaskPriority,
+    description?: string,
+    status?: TaskStatus,
+  ): Promise<{ task: Record<string, unknown> }> {
+    const body: Record<string, unknown> = { title };
+    if (priority) body.priority = priority;
+    if (description) body.description = description;
+    if (status) body.status = status;
+    return this.mcRequest("POST", "/tasks", body);
+  }
+
+  async mcUpdateTaskStatus(
+    taskId: string,
+    status: TaskStatus,
+  ): Promise<{ task: Record<string, unknown> }> {
+    return this.mcRequest("POST", `/tasks/${encodeURIComponent(taskId)}/status`, { status });
+  }
+
+  async mcDeleteTask(taskId: string): Promise<void> {
+    await this.mcRequest("DELETE", `/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  async mcCreateDocument(
+    title: string,
+    content: string,
+    type?: DocumentType,
+  ): Promise<{ document: Record<string, unknown> }> {
+    const body: Record<string, unknown> = { title, content };
+    if (type) body.type = type;
+    return this.mcRequest("POST", "/documents", body);
+  }
+
+  async mcDeleteDocument(docId: string): Promise<void> {
+    await this.mcRequest("DELETE", `/documents/${encodeURIComponent(docId)}`);
+  }
+
+  // -- Agents --
+
+  async mcListAgents(status?: string): Promise<{ agents: import("$lib/types/pawkit").AgentProfile[]; count: number }> {
+    const params = status ? `?status=${encodeURIComponent(status)}` : "";
+    return this.mcRequest("GET", `/agents${params}`);
+  }
+
+  async mcCreateAgent(body: {
+    name: string;
+    role: string;
+    description?: string;
+    specialties?: string[];
+    backend?: string;
+    level?: string;
+  }): Promise<{ agent: import("$lib/types/pawkit").AgentProfile }> {
+    return this.mcRequest("POST", "/agents", body);
+  }
+
+  async mcUpdateAgent(
+    agentId: string,
+    fields: Record<string, unknown>,
+  ): Promise<{ agent: import("$lib/types/pawkit").AgentProfile }> {
+    return this.mcRequest("PATCH", `/agents/${encodeURIComponent(agentId)}`, fields);
+  }
+
+  async mcDeleteAgent(agentId: string): Promise<void> {
+    await this.mcRequest("DELETE", `/agents/${encodeURIComponent(agentId)}`);
+  }
+
+  // -- Task assignment + execution --
+
+  async mcAssignTask(
+    taskId: string,
+    agentIds: string[],
+  ): Promise<{ task: Record<string, unknown> }> {
+    return this.mcRequest("POST", `/tasks/${encodeURIComponent(taskId)}/assign`, { agent_ids: agentIds });
+  }
+
+  async mcRunTask(
+    taskId: string,
+    agentId: string,
+  ): Promise<{ status: string; task_id: string; agent_id: string; agent_name: string; message: string }> {
+    return this.mcRequest("POST", `/tasks/${encodeURIComponent(taskId)}/run`, { agent_id: agentId });
+  }
+
+  async mcStopTask(taskId: string): Promise<void> {
+    await this.mcRequest("POST", `/tasks/${encodeURIComponent(taskId)}/stop`);
+  }
+
+  async mcGetRunningTasks(): Promise<{ running_tasks: Record<string, unknown>[]; count: number }> {
+    return this.mcRequest("GET", "/tasks/running");
+  }
+
+  // -- Task messages --
+
+  async mcGetTaskMessages(
+    taskId: string,
+    limit = 100,
+  ): Promise<{ messages: import("$lib/types/pawkit").MCMessage[]; count: number }> {
+    return this.mcRequest("GET", `/tasks/${encodeURIComponent(taskId)}/messages?limit=${limit}`);
+  }
+
+  async mcPostTaskMessage(
+    taskId: string,
+    content: string,
+    fromAgentId?: string,
+  ): Promise<{ message: import("$lib/types/pawkit").MCMessage }> {
+    const body: Record<string, unknown> = { content, from_agent_id: fromAgentId ?? "user" };
+    return this.mcRequest("POST", `/tasks/${encodeURIComponent(taskId)}/messages`, body);
+  }
+
+  // -- Notifications --
+
+  async mcListNotifications(
+    unreadOnly = false,
+  ): Promise<{ notifications: import("$lib/types/pawkit").MCNotification[]; count: number }> {
+    const params = unreadOnly ? "?unread_only=true" : "";
+    return this.mcRequest("GET", `/notifications${params}`);
+  }
+
+  async mcMarkNotificationRead(notificationId: string): Promise<void> {
+    await this.mcRequest("POST", `/notifications/${encodeURIComponent(notificationId)}/read`);
+  }
+
+  // -- Documents (enhanced) --
+
+  async mcGetDocument(
+    docId: string,
+  ): Promise<{ document: import("$lib/types/pawkit").MCDocument }> {
+    return this.mcRequest("GET", `/documents/${encodeURIComponent(docId)}`);
+  }
+
+  async mcUpdateDocument(
+    docId: string,
+    content: string,
+  ): Promise<{ document: import("$lib/types/pawkit").MCDocument }> {
+    return this.mcRequest("PATCH", `/documents/${encodeURIComponent(docId)}`, { content });
+  }
+
+  // -- Standup --
+
+  async mcGetStandup(): Promise<{ summary: string }> {
+    return this.mcRequest("GET", "/standup");
+  }
+
+  // -- MC Projects --
+
+  async mcListProjects(
+    status?: string,
+  ): Promise<{ projects: import("$lib/types/pawkit").MCProject[]; count: number }> {
+    const params = status ? `?status=${encodeURIComponent(status)}` : "";
+    return this.mcRequest("GET", `/projects${params}`);
+  }
+
+  async mcGetProject(
+    projectId: string,
+  ): Promise<{ project: import("$lib/types/pawkit").MCProject; tasks: Record<string, unknown>[]; progress: import("$lib/types/pawkit").MCProjectProgress }> {
+    return this.mcRequest("GET", `/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  async mcDeleteProject(projectId: string): Promise<void> {
+    await this.mcRequest("DELETE", `/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Deep Work
+  // ---------------------------------------------------------------------------
+
+  async dwParseGoal(
+    goal: string,
+  ): Promise<{ domain: string; complexity: string; ai_roles: string[]; human_roles: string[]; questions: string[] }> {
+    return this.dwRequest("POST", "/parse-goal", { description: goal });
+  }
+
+  async dwStartProject(
+    goal: string,
+    description?: string,
+  ): Promise<{ project_id: string; status: string; message: string }> {
+    const body: Record<string, unknown> = { description: goal };
+    if (description) body.research_depth = "auto";
+    return this.dwRequest("POST", "/start", body);
+  }
+
+  async dwGetPlan(
+    projectId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.dwRequest("GET", `/projects/${encodeURIComponent(projectId)}/plan`);
+  }
+
+  async dwApproveProject(projectId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/approve`);
+  }
+
+  async dwPauseProject(projectId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/pause`);
+  }
+
+  async dwResumeProject(projectId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/resume`);
+  }
+
+  async dwCancelProject(projectId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/cancel`);
+  }
+
+  async dwSkipTask(projectId: string, taskId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/skip`);
+  }
+
+  async dwRetryTask(projectId: string, taskId: string): Promise<Record<string, unknown>> {
+    return this.dwRequest("POST", `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/retry`);
   }
 }

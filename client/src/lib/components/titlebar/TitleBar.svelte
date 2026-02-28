@@ -3,6 +3,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { PanelLeft } from "@lucide/svelte";
   import WindowControls from "./WindowControls.svelte";
+  import WorkspaceTabs from "./WorkspaceTabs.svelte";
   import SessionTitle from "./SessionTitle.svelte";
   import ModelBadge from "./ModelBadge.svelte";
   import QuickActions from "./QuickActions.svelte";
@@ -37,7 +38,7 @@
 
   async function startDrag(e: MouseEvent) {
     const target = e.target as HTMLElement;
-    if (target.closest("button") || target.closest("input")) return;
+    if (target.closest("button") || target.closest("input") || target.closest("a")) return;
     try {
       await getCurrentWindow().startDragging();
     } catch {
@@ -64,8 +65,10 @@
     {/if}
   </div>
 
-  <!-- Center zone: session title + model badge -->
+  <!-- Center zone: workspace tabs + session title + model badge -->
   <div class="flex min-w-0 flex-1 items-center gap-2 px-2">
+    <WorkspaceTabs />
+    <div class="mx-1 h-3 w-px bg-border/50"></div>
     <SessionTitle />
     <span class="text-muted-foreground/40">&middot;</span>
     <ModelBadge />
