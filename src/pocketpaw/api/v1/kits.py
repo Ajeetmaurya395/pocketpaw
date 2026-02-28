@@ -216,8 +216,6 @@ async def _resolve_source(source: str) -> Any:
             return await mc.get_stats()
 
         if key == "tasks":
-            from pocketpaw.mission_control.models import TaskStatus
-
             tasks = await mc.list_tasks(limit=0)
             grouped: dict[str, list[dict]] = {}
             for t in tasks:
