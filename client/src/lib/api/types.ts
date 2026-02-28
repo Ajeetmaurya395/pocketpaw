@@ -387,6 +387,78 @@ export interface WSSkills {
   skills: Skill[];
 }
 
+export interface WSKitDataUpdate {
+  type: "kit_data_update";
+  kit_id: string;
+  source: string;
+  data: unknown;
+}
+
+export interface WSMCTaskStarted {
+  type: "mc_task_started";
+  task_id: string;
+  agent_id: string;
+  agent_name: string;
+  task_title: string;
+  timestamp: string;
+}
+
+export interface WSMCTaskOutput {
+  type: "mc_task_output";
+  task_id: string;
+  content: string;
+  output_type: "message" | "tool_use" | "tool_result";
+  timestamp: string;
+}
+
+export interface WSMCTaskCompleted {
+  type: "mc_task_completed";
+  task_id: string;
+  agent_id: string;
+  status: "completed" | "error" | "stopped" | "timeout";
+  error?: string;
+  retry?: boolean;
+  retry_count?: number;
+  max_retries?: number;
+  timestamp: string;
+}
+
+export interface WSMCTaskRetry {
+  type: "mc_task_retry";
+  task_id: string;
+  agent_id: string;
+  retry_count: number;
+  max_retries: number;
+  error: string;
+  timestamp: string;
+}
+
+export interface WSMCActivityCreated {
+  type: "mc_activity_created";
+  activity: Record<string, unknown>;
+}
+
+export interface WSDWPlanningPhase {
+  type: "dw_planning_phase";
+  project_id: string;
+  phase: "goal_analysis" | "research" | "prd" | "tasks" | "team";
+  message: string;
+}
+
+export interface WSDWPlanningComplete {
+  type: "dw_planning_complete";
+  project_id: string;
+  status: string;
+  title: string;
+  error?: string;
+}
+
+export interface WSDWProjectCancelled {
+  type: "dw_project_cancelled";
+  project_id: string;
+  title: string;
+}
+
 export type WSEvent =
   | WSNotification
   | WSError
@@ -394,7 +466,16 @@ export type WSEvent =
   | WSReminders
   | WSReminderAdded
   | WSReminderDeleted
-  | WSSkills;
+  | WSSkills
+  | WSKitDataUpdate
+  | WSMCTaskStarted
+  | WSMCTaskOutput
+  | WSMCTaskCompleted
+  | WSMCTaskRetry
+  | WSMCActivityCreated
+  | WSDWPlanningPhase
+  | WSDWPlanningComplete
+  | WSDWProjectCancelled;
 
 // -- SSE Events (from POST /chat/stream) ------------------------------------
 
