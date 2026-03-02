@@ -12,6 +12,7 @@ Changes:
 
 import json
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -19,6 +20,63 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+# API key validation patterns
+_API_KEY_PATTERNS = {
+    "anthropic_api_key": {
+        "pattern": re.compile(r"^sk-ant-"),
+        "example": "sk-ant-...",
+        "name": "Anthropic API key",
+    },
+    "openai_api_key": {
+        "pattern": re.compile(r"^sk-"),
+        "example": "sk-...",
+        "name": "OpenAI API key",
+    },
+    "telegram_bot_token": {
+        "pattern": re.compile(r"^\d+:AA[A-Za-z0-9_-]{30,}$"),
+        "example": "123456789:AAH...",
+        "name": "Telegram bot token",
+    },
+}
+
+
+def validate_api_key(field_name: str, value: str) -> tuple[bool, str]:
+    """Validate a **single** API key against strict regex patterns.
+
+    Used by the REST ``PUT /settings`` endpoint and the WS ``save_api_key``
+    handler to check format *before* saving.  Returns a per-key verdict so
+    the caller can surface a targeted warning.
+
+    See also :func:`validate_api_keys` which validates *all* keys on a
+    :class:`Settings` instance using looser prefix checks.
+
+    Args:
+        field_name: Settings field name (e.g., ``"anthropic_api_key"``).
+        value: The raw API key string to validate.
+
+    Returns:
+        ``(True, "")`` when the format is acceptable, or
+        ``(False, "<human-readable warning>")`` when it is not.
+    """
+    if not value or not value.strip():
+        return True, ""  # Empty values are allowed (user may want to unset)
+
+    value = value.strip()
+
+    validator = _API_KEY_PATTERNS.get(field_name)
+    if not validator:
+        return True, ""  # No validation rule for this field
+
+    if not validator["pattern"].match(value):
+        return False, (
+            f"{validator['name']} doesn't match expected format "
+            f"(expected format: {validator['example']}). "
+            f"Double-check for typos or truncation."
+        )
+
+    return True, ""
 
 
 def _chmod_safe(path: Path, mode: int) -> None:
@@ -78,6 +136,32 @@ def get_config_path() -> Path:
 def get_token_path() -> Path:
     """Get the access token file path."""
     return get_config_dir() / "access_token"
+
+
+# Telegram bot token format: numeric id + colon + alphanumeric secret
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
+
+
+def validate_api_keys(settings: "Settings") -> list[str]:
+    """Validate **all** API keys on a :class:`Settings` instance (batch, loose).
+
+    Uses simple prefix checks (not the strict regexes in :func:`validate_api_key`)
+    and returns a list of human-readable warnings.  Designed for advisory use
+    (e.g. ``Settings.save()`` logs warnings) — callers must **never** block a
+    save based on these results.
+    """
+    warnings: list[str] = []
+    if settings.anthropic_api_key and not settings.anthropic_api_key.startswith("sk-ant-"):
+        warnings.append("Anthropic API key may be invalid: expected to start with sk-ant-")
+    if settings.openai_api_key and not settings.openai_api_key.startswith("sk-"):
+        warnings.append("OpenAI API key may be invalid: expected to start with sk-")
+    if settings.telegram_bot_token and not _TELEGRAM_BOT_TOKEN_RE.fullmatch(
+        settings.telegram_bot_token.strip()
+    ):
+        warnings.append(
+            "Telegram bot token may be invalid: expected format is numeric_id:alphanumeric_secret"
+        )
+    return warnings
 
 
 class Settings(BaseSettings):
@@ -144,9 +228,7 @@ class Settings(BaseSettings):
     )
 
     # Codex CLI Settings
-    codex_cli_model: str = Field(
-        default="gpt-5.3-codex", description="Model for Codex CLI backend"
-    )
+    codex_cli_model: str = Field(default="gpt-5.3-codex", description="Model for Codex CLI backend")
     codex_cli_max_turns: int = Field(
         default=100, description="Max turns per query in Codex CLI backend (0 = unlimited)"
     )
@@ -203,9 +285,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     openai_model: str = Field(default="gpt-5.2", description="OpenAI model to use")
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key")
-    anthropic_model: str = Field(
-        default="claude-sonnet-4-6", description="Anthropic model to use"
-    )
+    anthropic_model: str = Field(default="claude-sonnet-4-6", description="Anthropic model to use")
 
     # Memory Backend
     memory_backend: str = Field(
@@ -344,6 +424,14 @@ class Settings(BaseSettings):
     )
     session_token_ttl_hours: int = Field(
         default=24, description="TTL in hours for HMAC session tokens issued via /api/auth/session"
+    )
+    api_cors_allowed_origins: list[str] = Field(
+        default_factory=list,
+        description="Additional CORS origins for external clients (e.g. tauri://localhost)",
+    )
+    api_rate_limit_per_key: int = Field(
+        default=60,
+        description="Max requests per minute per API key (token-bucket capacity)",
     )
     file_jail_path: Path = Field(
         default_factory=Path.home, description="Root path for file operations"
@@ -544,201 +632,32 @@ class Settings(BaseSettings):
 
         Non-secret fields go to config.json. Secret fields (API keys, tokens)
         go to the encrypted credential store.
+
+        Uses model_dump() to automatically include all fields — no need to
+        manually list every field when new settings are added.
+
+        Runs format validation on API keys before saving; logs warnings but
+        never blocks or raises.
         """
         from pocketpaw.credentials import SECRET_FIELDS, get_credential_store
 
         config_path = get_config_path()
 
-        # Load existing config to preserve non-secret values if not set
-        existing = {}
+        # Load existing config to preserve secret values if current is empty
+        existing: dict = {}
         if config_path.exists():
             try:
                 existing = json.loads(config_path.read_text())
             except (json.JSONDecodeError, Exception):
                 pass
 
-        # Build full settings dict
-        all_fields = {
-            "telegram_bot_token": self.telegram_bot_token or existing.get("telegram_bot_token"),
-            "allowed_user_id": self.allowed_user_id or existing.get("allowed_user_id"),
-            "agent_backend": self.agent_backend,
-            "claude_sdk_provider": self.claude_sdk_provider,
-            "claude_sdk_model": self.claude_sdk_model,
-            "claude_sdk_max_turns": self.claude_sdk_max_turns,
-            # OpenAI Agents
-            "openai_agents_provider": self.openai_agents_provider,
-            "openai_agents_model": self.openai_agents_model,
-            "openai_agents_max_turns": self.openai_agents_max_turns,
-            # Gemini CLI (legacy)
-            "gemini_cli_model": self.gemini_cli_model,
-            "gemini_cli_max_turns": self.gemini_cli_max_turns,
-            # Google ADK
-            "google_adk_model": self.google_adk_model,
-            "google_adk_max_turns": self.google_adk_max_turns,
-            # Codex CLI
-            "codex_cli_model": self.codex_cli_model,
-            "codex_cli_max_turns": self.codex_cli_max_turns,
-            # Copilot SDK
-            "copilot_sdk_provider": self.copilot_sdk_provider,
-            "copilot_sdk_model": self.copilot_sdk_model,
-            "copilot_sdk_max_turns": self.copilot_sdk_max_turns,
-            # OpenCode
-            "opencode_base_url": self.opencode_base_url,
-            "opencode_model": self.opencode_model,
-            "opencode_max_turns": self.opencode_max_turns,
-            "memory_backend": self.memory_backend,
-            "memory_use_inference": self.memory_use_inference,
-            "mem0_llm_provider": self.mem0_llm_provider,
-            "mem0_llm_model": self.mem0_llm_model,
-            "mem0_embedder_provider": self.mem0_embedder_provider,
-            "mem0_embedder_model": self.mem0_embedder_model,
-            "mem0_vector_store": self.mem0_vector_store,
-            "mem0_ollama_base_url": self.mem0_ollama_base_url,
-            "mem0_auto_learn": self.mem0_auto_learn,
-            "file_auto_learn": self.file_auto_learn,
-            "compaction_recent_window": self.compaction_recent_window,
-            "compaction_char_budget": self.compaction_char_budget,
-            "compaction_summary_chars": self.compaction_summary_chars,
-            "compaction_llm_summarize": self.compaction_llm_summarize,
-            "llm_provider": self.llm_provider,
-            "ollama_host": self.ollama_host,
-            "ollama_model": self.ollama_model,
-            "openai_api_key": self.openai_api_key or existing.get("openai_api_key"),
-            "openai_model": self.openai_model,
-            "anthropic_api_key": self.anthropic_api_key or existing.get("anthropic_api_key"),
-            "anthropic_model": self.anthropic_model,
-            # OpenAI-Compatible
-            "openai_compatible_base_url": self.openai_compatible_base_url,
-            "openai_compatible_api_key": (
-                self.openai_compatible_api_key or existing.get("openai_compatible_api_key")
-            ),
-            "openai_compatible_model": self.openai_compatible_model,
-            "openai_compatible_max_tokens": self.openai_compatible_max_tokens,
-            # Gemini
-            "gemini_model": self.gemini_model,
-            # Discord
-            "discord_bot_token": (self.discord_bot_token or existing.get("discord_bot_token")),
-            "discord_allowed_guild_ids": self.discord_allowed_guild_ids,
-            "discord_allowed_user_ids": self.discord_allowed_user_ids,
-            # Slack
-            "slack_bot_token": self.slack_bot_token or existing.get("slack_bot_token"),
-            "slack_app_token": self.slack_app_token or existing.get("slack_app_token"),
-            "slack_allowed_channel_ids": self.slack_allowed_channel_ids,
-            # Web Search
-            "web_search_provider": self.web_search_provider,
-            "tavily_api_key": self.tavily_api_key or existing.get("tavily_api_key"),
-            "brave_search_api_key": (
-                self.brave_search_api_key or existing.get("brave_search_api_key")
-            ),
-            "parallel_api_key": self.parallel_api_key or existing.get("parallel_api_key"),
-            "url_extract_provider": self.url_extract_provider,
-            # Image Generation
-            "google_api_key": self.google_api_key or existing.get("google_api_key"),
-            "image_model": self.image_model,
-            # WhatsApp
-            "whatsapp_mode": self.whatsapp_mode,
-            "whatsapp_neonize_db": self.whatsapp_neonize_db,
-            "whatsapp_access_token": (
-                self.whatsapp_access_token or existing.get("whatsapp_access_token")
-            ),
-            "whatsapp_phone_number_id": (
-                self.whatsapp_phone_number_id or existing.get("whatsapp_phone_number_id")
-            ),
-            "whatsapp_verify_token": (
-                self.whatsapp_verify_token or existing.get("whatsapp_verify_token")
-            ),
-            "whatsapp_allowed_phone_numbers": self.whatsapp_allowed_phone_numbers,
-            # Tool policy
-            "tool_profile": self.tool_profile,
-            "tools_allow": self.tools_allow,
-            "tools_deny": self.tools_deny,
-            # Security
-            "injection_scan_enabled": self.injection_scan_enabled,
-            "injection_scan_llm": self.injection_scan_llm,
-            "injection_scan_llm_model": self.injection_scan_llm_model,
-            "localhost_auth_bypass": self.localhost_auth_bypass,
-            "session_token_ttl_hours": self.session_token_ttl_hours,
-            # Smart routing
-            "smart_routing_enabled": self.smart_routing_enabled,
-            "model_tier_simple": self.model_tier_simple,
-            "model_tier_moderate": self.model_tier_moderate,
-            "model_tier_complex": self.model_tier_complex,
-            # Plan mode
-            "plan_mode": self.plan_mode,
-            "plan_mode_tools": self.plan_mode_tools,
-            # Self-audit
-            "self_audit_enabled": self.self_audit_enabled,
-            "self_audit_schedule": self.self_audit_schedule,
-            # OAuth
-            "google_oauth_client_id": (
-                self.google_oauth_client_id or existing.get("google_oauth_client_id")
-            ),
-            "google_oauth_client_secret": (
-                self.google_oauth_client_secret or existing.get("google_oauth_client_secret")
-            ),
-            # MCP OAuth
-            "mcp_client_metadata_url": self.mcp_client_metadata_url,
-            # Voice/TTS
-            "tts_provider": self.tts_provider,
-            "elevenlabs_api_key": (self.elevenlabs_api_key or existing.get("elevenlabs_api_key")),
-            "tts_voice": self.tts_voice,
-            "stt_provider": self.stt_provider,
-            "stt_model": self.stt_model,
-            # OCR
-            "ocr_provider": self.ocr_provider,
-            # Sarvam AI
-            "sarvam_api_key": self.sarvam_api_key or existing.get("sarvam_api_key"),
-            "sarvam_tts_model": self.sarvam_tts_model,
-            "sarvam_tts_speaker": self.sarvam_tts_speaker,
-            "sarvam_tts_language": self.sarvam_tts_language,
-            "sarvam_stt_model": self.sarvam_stt_model,
-            # Spotify
-            "spotify_client_id": (self.spotify_client_id or existing.get("spotify_client_id")),
-            "spotify_client_secret": (
-                self.spotify_client_secret or existing.get("spotify_client_secret")
-            ),
-            # Signal
-            "signal_api_url": self.signal_api_url,
-            "signal_phone_number": self.signal_phone_number,
-            "signal_allowed_phone_numbers": self.signal_allowed_phone_numbers,
-            # Matrix
-            "matrix_homeserver": self.matrix_homeserver,
-            "matrix_user_id": self.matrix_user_id,
-            "matrix_access_token": (
-                self.matrix_access_token or existing.get("matrix_access_token")
-            ),
-            "matrix_password": self.matrix_password or existing.get("matrix_password"),
-            "matrix_allowed_room_ids": self.matrix_allowed_room_ids,
-            "matrix_device_id": self.matrix_device_id,
-            # Teams
-            "teams_app_id": self.teams_app_id or existing.get("teams_app_id"),
-            "teams_app_password": (self.teams_app_password or existing.get("teams_app_password")),
-            "teams_allowed_tenant_ids": self.teams_allowed_tenant_ids,
-            "teams_webhook_port": self.teams_webhook_port,
-            # Google Chat
-            "gchat_mode": self.gchat_mode,
-            "gchat_service_account_key": (
-                self.gchat_service_account_key or existing.get("gchat_service_account_key")
-            ),
-            "gchat_project_id": self.gchat_project_id,
-            "gchat_subscription_id": self.gchat_subscription_id,
-            "gchat_allowed_space_ids": self.gchat_allowed_space_ids,
-            # Generic Webhooks
-            "webhook_configs": self.webhook_configs,
-            "webhook_sync_timeout": self.webhook_sync_timeout,
-            # Identity / Multi-user
-            "owner_id": self.owner_id,
-            "notification_channels": self.notification_channels,
-            # Media Downloads
-            "media_download_dir": self.media_download_dir,
-            "media_max_file_size_mb": self.media_max_file_size_mb,
-            # UX
-            "welcome_hint_enabled": self.welcome_hint_enabled,
-            # Channel Autostart
-            "channel_autostart": self.channel_autostart,
-            # Concurrency
-            "max_concurrent_conversations": self.max_concurrent_conversations,
-        }
+        # Dump all fields with JSON-mode serialization (converts Path→str, etc.)
+        all_fields = self.model_dump(mode="json")
+
+        # For secret fields, preserve existing value if current is empty/None
+        for key in SECRET_FIELDS:
+            if key in all_fields and not all_fields[key] and existing.get(key):
+                all_fields[key] = existing[key]
 
         # Store secrets in the encrypted credential store, then strip
         # them from the dict before writing config.json to prevent

@@ -50,6 +50,7 @@ function app() {
         settingsMobileView: 'list',
         settingsSearch: '',
         settingsSearchResults: [],
+        settingsValidationWarnings: [],
         settingsSections: [
             { id: 'general', label: 'General', icon: 'settings' },
             { id: 'apikeys', label: 'API Keys', icon: 'key' },
@@ -122,7 +123,9 @@ function app() {
             mem0EmbedderProvider: 'openai',
             mem0EmbedderModel: 'text-embedding-3-small',
             mem0VectorStore: 'qdrant',
-            mem0OllamaBaseUrl: 'http://localhost:11434'
+            mem0OllamaBaseUrl: 'http://localhost:11434',
+            webHost: '127.0.0.1',
+            webPort: 8888
         },
 
         // API Keys (not persisted client-side, but we track if saved on server)
@@ -157,6 +160,7 @@ function app() {
         // Backend discovery data (fetched from /api/backends)
         _backendsData: [],
         backendInstallLoading: false,
+        serverRestarting: false,
 
         // Spread feature states
         ...featureStates,
@@ -411,6 +415,10 @@ function app() {
             socket.on('stream_end', () => this.endStreaming());
             socket.on('files', (data) => this.handleFiles(data));
             socket.on('settings', (data) => this.handleSettings(data));
+            socket.on('settings_saved', (data) => {
+                this.settingsValidationWarnings = data.warnings || [];
+                this.showToast(data.content || 'Settings updated', 'success');
+            });
 
             // Reminder handlers
             socket.on('reminders', (data) => this.handleReminders(data));
@@ -480,7 +488,8 @@ function app() {
                 'selfAuditEnabled', 'selfAuditSchedule',
                 'memoryBackend', 'mem0AutoLearn', 'mem0LlmProvider',
                 'mem0LlmModel', 'mem0EmbedderProvider', 'mem0EmbedderModel',
-                'mem0VectorStore', 'mem0OllamaBaseUrl'
+                'mem0VectorStore', 'mem0OllamaBaseUrl',
+                'webHost', 'webPort'
             ];
             for (const key of SETTINGS_MAP) {
                 if (s[key] !== undefined) this.settings[key] = s[key];
@@ -563,6 +572,7 @@ function app() {
             this.settingsMobileView = 'list';
             this.settingsSearch = '';
             this.settingsSearchResults = [];
+            this.settingsValidationWarnings = [];
             this.showSettings = true;
         },
 
@@ -571,6 +581,33 @@ function app() {
          */
         saveSettings() {
             socket.saveSettings(this.settings);
+        },
+
+        /**
+         * Restart the server (for host/port changes)
+         */
+        async restartServer() {
+            if (!confirm(
+                'Restart the server? Active connections will be interrupted.'
+            )) return;
+            this.serverRestarting = true;
+            try {
+                await fetch('/api/system/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirm: true }),
+                });
+                this.showToast(
+                    'Server is restarting. If you changed the host or port, ' +
+                    'reconnect at the new address.',
+                    'info'
+                );
+            } catch {
+                this.showToast('Restart request sent. Reconnecting…', 'info');
+            } finally {
+                // Reset after a delay so the button re-enables if the page survives
+                setTimeout(() => { this.serverRestarting = false; }, 5000);
+            }
         },
 
         /**

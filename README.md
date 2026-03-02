@@ -2,10 +2,10 @@
   <img src="paw.png" alt="PocketPaw" width="100">
 </p>
 
-<h1 align="center">PocketPaw</h1>
+<h1 align="center">🐾 PocketPaw</h1>
 
 <p align="center">
-  <strong>Your AI agent. Modular. Secure. Everywhere.</strong>
+  <strong>An AI agent that runs on your machine, not someone else's.</strong>
 </p>
 
 <p align="center">
@@ -17,17 +17,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-macOS-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Download_.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
-  &nbsp;
   <a href="https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-Setup.exe"><img src="https://img.shields.io/badge/Windows-Download_.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
 </p>
 
 <p align="center">
-  Self-hosted, multi-agent AI platform. Web dashboard + <strong>Discord</strong>, <strong>Slack</strong>, <strong>WhatsApp</strong>, <strong>Telegram</strong>, and more.<br>
-  No subscription. No cloud lock-in. Just you and your Paw.
+  Self-hosted AI agent with a web dashboard. Talks to you over <strong>Discord</strong>, <strong>Slack</strong>, <strong>WhatsApp</strong>, <strong>Telegram</strong>, or the browser.<br>
+  No subscription. No cloud lock-in. Your data stays on your machine.
 </p>
 
-> **Beta:** This project is under active development. Expect breaking changes between versions.
+> ⚠️ **Beta:** This project is under active development. Expect breaking changes between versions.
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/a15bb8c7-6897-40d2-8111-aa905fe3fdfe" width="700" controls></video>
@@ -37,13 +35,12 @@
 
 ## Quick Start
 
-### Desktop App
+### Via Desktop Installer
 
-Download the native app — includes auto-updates, system tray, and launches on startup.
+Sets up Python and PocketPaw in one click, then opens the dashboard.
 
 | Platform | Download |
 | --- | --- |
-| **macOS** (Apple Silicon) | [PocketPaw-macOS-arm64.dmg](https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-macOS-arm64.dmg) |
 | **Windows** | [PocketPaw-Setup.exe](https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-Setup.exe) |
 
 ### Install via Terminal
@@ -51,11 +48,37 @@ Download the native app — includes auto-updates, system tray, and launches on 
 <details open>
 <summary>macOS / Linux</summary>
 
+**Prerequisites:**
+- Python 3.11 or higher ([download here](https://www.python.org/downloads/))
+- pip package manager (included with Python)
+
+**Quick install:**
+
 ```bash
 pip install pocketpaw && pocketpaw
 ```
 
-Or use the install script:
+**Recommended install (with virtual environment):**
+
+```bash
+# 1. Verify Python version (must be 3.11+)
+python3 --version
+
+# 2. Upgrade pip to latest version
+python3 -m pip install --upgrade pip
+
+# 3. Create and activate virtual environment (optional but recommended)
+python3 -m venv pocketpaw-env
+source pocketpaw-env/bin/activate
+
+# 4. Install PocketPaw
+pip install pocketpaw
+
+# 5. Run PocketPaw
+pocketpaw
+```
+
+**Or use the automated install script:**
 
 ```bash
 curl -fsSL https://pocketpaw.xyz/install.sh | sh
@@ -66,20 +89,87 @@ curl -fsSL https://pocketpaw.xyz/install.sh | sh
 <details>
 <summary>Windows (PowerShell)</summary>
 
+**Prerequisites:**
+- Python 3.11 or higher ([download here](https://www.python.org/downloads/))
+- pip package manager (included with Python)
+- Ensure Python is added to PATH during installation
+
+**Automated installer:**
+
 ```powershell
 powershell -NoExit -Command "iwr -useb https://pocketpaw.xyz/install.ps1 | iex"
 ```
 
-Or install manually with pip:
+**Manual install with pip:**
 
 ```powershell
+# 1. Verify Python version (must be 3.11+)
+python --version
+
+# 2. Upgrade pip to latest version
+python -m pip install --upgrade pip
+
+# 3. Create and activate virtual environment (optional but recommended)
+python -m venv pocketpaw-env
+.\pocketpaw-env\Scripts\Activate.ps1
+
+# 4. Install PocketPaw
 pip install pocketpaw
+
+# 5. Run PocketPaw
 pocketpaw
 ```
+---
 
+> [!TIP]
+> **First Run:** After opening the dashboard, the system health may show **UNHEALTHY** — this is expected if no API key is configured. The app itself is running correctly; only AI features are disabled. Go to **Settings > API Keys** to add your key, or [use Ollama for free local inference](#features).
+
+    
 > **Note:** Some features (browser automation, shell tools) work best under WSL2. Native Windows support covers the web dashboard and all LLM chat features.
 
 </details>
+## Windows CLI Troubleshooting
+
+If you installed PocketPaw using:
+
+```powershell
+pip install pocketpaw
+```
+
+and the `pocketpaw` command is not recognized:
+
+```text
+'pocketpaw' is not recognized as an internal or external command
+```
+
+This usually means your Python Scripts directory is not added to PATH.
+
+By default, it is located at:
+
+```text
+C:\Users\<your-username>\AppData\Local\Python\Python3.XX\Scripts
+```
+
+You can find your exact Scripts path by running:
+
+```powershell
+python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+```
+
+### How to Fix
+
+1. Open Start → Search "Environment Variables"
+2. Click "Edit the system environment variables"
+3. Click "Environment Variables"
+4. Under User variables → Select `Path` → Click Edit
+5. Add the Scripts directory path
+6. Restart your terminal
+
+Alternatively, you can run PocketPaw using:
+
+```powershell
+python -m pocketpaw
+```
 
 <details>
 <summary>Other methods</summary>
@@ -110,11 +200,11 @@ Dashboard at `http://localhost:8888`. Get the access token:
 docker exec pocketpaw cat /home/pocketpaw/.pocketpaw/access_token
 ```
 
-Optional profiles: `--profile ollama` (local LLMs), `--profile qdrant` (vector memory).
+Agent-created files appear in `./workspace/` on the host. Optional profiles: `--profile ollama` (local LLMs), `--profile qdrant` (vector memory). Using Ollama on the host? Set `POCKETPAW_OLLAMA_HOST=http://host.docker.internal:11434` in `.env`.
 
 </details>
 
-**That's it.** The web dashboard opens automatically at `http://localhost:8888`. Connect Discord, Slack, WhatsApp, or Telegram and control your agent from anywhere.
+The web dashboard opens at `http://localhost:8888`. From there you can connect Discord, Slack, WhatsApp, or Telegram.
 
 ---
 
@@ -122,13 +212,13 @@ Optional profiles: `--profile ollama` (local LLMs), `--profile qdrant` (vector m
 
 | | |
 | --- | --- |
-| **9+ Channels** | Web Dashboard, Discord, Slack, WhatsApp, Telegram, Signal, Matrix, Teams, Google Chat |
-| **6 Agent Backends** | Claude Agent SDK, OpenAI Agents, Google ADK, Codex CLI, OpenCode, Copilot SDK |
-| **50+ Tools** | Browser, web search, image gen, voice/TTS/STT, OCR, research, delegation, skills |
-| **Integrations** | Gmail, Calendar, Google Drive & Docs, Spotify, Reddit, MCP servers |
-| **Memory** | Long-term facts, session history, smart compaction, Mem0 semantic search |
-| **Security** | Guardian AI, injection scanner, tool policy, plan mode, audit log, self-audit daemon |
-| **Local-First** | Runs on your machine. Ollama for fully offline operation. macOS / Windows / Linux. |
+| 📡 **9+ Channels** | Web Dashboard, Discord, Slack, WhatsApp, Telegram, Signal, Matrix, Teams, Google Chat |
+| 🧠 **6 Agent Backends** | Claude Agent SDK, OpenAI Agents, Google ADK, Codex CLI, OpenCode, Copilot SDK |
+| 🛠️ **50+ Tools** | Browser, web search, image gen, voice/TTS/STT, OCR, research, delegation, skills |
+| 🔌 **Integrations** | Gmail, Calendar, Google Drive & Docs, Spotify, Reddit, MCP servers |
+| 💾 **Memory** | Long-term facts, session history, smart compaction, Mem0 semantic search |
+| 🔒 **Security** | Guardian AI, injection scanner, tool policy, plan mode, audit log, self-audit daemon |
+| 🏠 **Local-First** | Runs on your machine. Ollama for fully offline operation. macOS / Windows / Linux. |
 
 ### Examples
 
@@ -151,7 +241,7 @@ Paw:  3 agents working on it. I'll ping you when it's ready.
   <img src="docs/public/pocketpaw-system-architecture.webp" alt="PocketPaw System Architecture" width="800">
 </p>
 
-**Event-driven message bus** — all channels publish to a unified bus, consumed by the AgentLoop, which routes to one of 6 backends via a registry-based router. All backends implement the `AgentBackend` protocol and yield standardized `AgentEvent` objects.
+Everything goes through an event-driven message bus. Channels publish messages, the `AgentLoop` picks them up and routes to whichever backend you've configured. All six backends implement the same `AgentBackend` protocol, so swapping one for another doesn't touch the rest of the system.
 
 ### Agent Backends
 
@@ -170,7 +260,7 @@ Paw:  3 agents working on it. I'll ping you when it's ready.
   <img src="docs/public/pocketpaw-security-stack.webp" alt="PocketPaw 7-Layer Security Stack" width="500">
 </p>
 
-Guardian AI safety checks, injection scanner, tool policy engine (profiles + allow/deny), plan mode approval, audit CLI (`--security-audit`), self-audit daemon, and append-only audit log. [Learn more](https://docs.pocketpaw.xyz/security).
+A secondary LLM (Guardian AI) reviews every tool call before it runs. On top of that: injection scanning, configurable tool policies, plan mode for human approval, `--security-audit` CLI, a self-audit daemon, and an append-only audit log. [Details in the docs](https://pocketpaw.xyz/security).
 
 <details>
 <summary>Detailed security architecture</summary>
@@ -184,7 +274,7 @@ Guardian AI safety checks, injection scanner, tool policy engine (profiles + all
 
 ## Configuration
 
-Config at `~/.pocketpaw/config.json`, or use `POCKETPAW_`-prefixed env vars, or the dashboard Settings panel. API keys are encrypted at rest.
+Settings live in `~/.pocketpaw/config.json`. You can also use `POCKETPAW_`-prefixed env vars or the dashboard Settings panel. API keys are encrypted at rest.
 
 ```bash
 export POCKETPAW_ANTHROPIC_API_KEY="sk-ant-..."   # Required for Claude SDK backend
@@ -193,18 +283,61 @@ export POCKETPAW_AGENT_BACKEND="claude_agent_sdk"  # or openai_agents, google_ad
 
 > **Note:** An Anthropic API key from [console.anthropic.com](https://console.anthropic.com/api-keys) is required for the Claude SDK backend. OAuth tokens from Claude Free/Pro/Max plans are [not permitted](https://code.claude.com/docs/en/legal-and-compliance#authentication-and-credential-use) for third-party use. For free local inference, use Ollama instead.
 
-See the [full configuration reference](https://docs.pocketpaw.xyz/getting-started/configuration) for all settings.
+See the [full configuration reference](https://pocketpaw.xyz/getting-started/configuration) for all settings.
 
 ---
 
 ## Development
 
+**Prerequisites:**
+- Python 3.11 or higher ([download here](https://www.python.org/downloads/))
+- [uv](https://docs.astral.sh/uv/) package manager
+
+**Install uv:**
+
 ```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or via pip
+pip install uv
+```
+
+> **Windows Note:** After installing `uv` via the PowerShell script, you may need to **restart your terminal** for the `uv` command to be recognized. The installer adds `uv` to `C:\Users\<your-username>\.local\bin` and updates your PATH, but the current session won't reflect this change until you open a new terminal window.
+>
+> If you want to use `uv` immediately without restarting, run:
+> ```powershell
+> $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+> ```
+>
+> Verify the installation:
+> ```powershell
+> uv --version
+> ```
+
+**Setup and run:**
+
+```bash
+# 1. Verify Python version
+python3 --version
+
+# 2. Clone and enter the repository
 git clone https://github.com/pocketpaw/pocketpaw.git && cd pocketpaw
-uv sync --dev               # Install with dev deps
-uv run pocketpaw --dev      # Dashboard with auto-reload
+
+# 3. Install with dev dependencies
+uv sync --dev
+
+# 4. Run PocketPaw in development mode (auto-reload)
+uv run pocketpaw --dev
+
+# 5. Run tests
 uv run pytest               # Run tests (2000+)
-uv run ruff check . && uv run ruff format .  # Lint & format
+
+# 6. Lint & format
+uv run ruff check . && uv run ruff format .
 ```
 
 <details>
@@ -225,7 +358,7 @@ pip install pocketpaw[all]                 # Everything
 
 ## Documentation
 
-Full docs at **[docs.pocketpaw.xyz](https://docs.pocketpaw.xyz)** — getting started, backends, channels, tools, integrations, security, memory, API reference (50+ endpoints).
+**[pocketpaw.xyz](https://pocketpaw.xyz)** covers getting started, backends, channels, tools, integrations, security, memory, and the full API reference.
 
 ---
 
@@ -249,8 +382,8 @@ Full docs at **[docs.pocketpaw.xyz](https://docs.pocketpaw.xyz)** — getting st
 
 ## Join the Pack
 
-- Twitter: [@PocketPawAI](https://twitter.com/PocketPaw89242)
-- Discord: Coming Soon
+- Twitter: [@prakashd88](https://twitter.com/prakashd88)
+- Discord: [dsc.gg/pocketpaw](https://dsc.gg/pocketpaw)
 - Email: pocketpawai@gmail.com
 
 PRs welcome. Come build with us.
@@ -262,5 +395,5 @@ MIT &copy; PocketPaw Team
 <p align="center">
   <img src="paw.png" alt="PocketPaw" width="40">
   <br>
-  <strong>Made with love for humans who want AI on their own terms</strong>
+  <strong>Built for people who'd rather own their AI than rent it</strong>
 </p>

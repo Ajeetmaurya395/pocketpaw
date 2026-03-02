@@ -30,6 +30,12 @@ from installer.launcher.common import (
 
 logger = logging.getLogger(__name__)
 
+# CREATE_NO_WINDOW flag prevents console window flash on Windows
+# when launching subprocesses from a GUI app (Tauri desktop launcher).
+_SUBPROCESS_FLAGS: dict = (
+    {"creationflags": 0x08000000} if platform.system() == "Windows" else {}
+)
+
 EMBEDDED_PYTHON_DIR = POCKETPAW_HOME / "python"
 MIN_PYTHON = (3, 11)
 
@@ -77,7 +83,10 @@ def _resolve_uv_version() -> str:
 
     try:
         url = "https://api.github.com/repos/astral-sh/uv/releases/latest"
-        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github.v3+json"})
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "pocketpaw-installer/1.0",
+        })
         resp = urllib.request.urlopen(req, timeout=10)
         data = json.loads(resp.read())
         tag = data.get("tag_name", "")
@@ -316,6 +325,7 @@ class Bootstrap:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                **_SUBPROCESS_FLAGS,
             )
             if result.returncode == 0:
                 parts = result.stdout.strip().split()
@@ -337,6 +347,7 @@ class Bootstrap:
                 capture_output=True,
                 text=True,
                 timeout=10,
+                **_SUBPROCESS_FLAGS,
             )
             if result.returncode == 0:
                 return result.stdout.strip()
@@ -400,6 +411,7 @@ class Bootstrap:
                 [python_exe, str(get_pip_path), "--no-warn-script-location"],
                 capture_output=True,
                 timeout=120,
+                **_SUBPROCESS_FLAGS,
             )
             get_pip_path.unlink(missing_ok=True)
 
@@ -520,6 +532,7 @@ class Bootstrap:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                **_SUBPROCESS_FLAGS,
             )
             if result.returncode == 0:
                 return
@@ -537,6 +550,7 @@ class Bootstrap:
                 capture_output=True,
                 text=True,
                 timeout=180,  # may download ~30 MB
+                **_SUBPROCESS_FLAGS,
             )
             if result.returncode == 0:
                 logger.info("Created venv using uv-managed Python")
@@ -552,6 +566,7 @@ class Bootstrap:
                 capture_output=True,
                 text=True,
                 timeout=60,
+                **_SUBPROCESS_FLAGS,
             )
             if result.returncode == 0:
                 return
@@ -658,6 +673,7 @@ class Bootstrap:
                     [str(venv_py), str(get_pip), "--no-warn-script-location"],
                     capture_output=True,
                     timeout=120,
+                    **_SUBPROCESS_FLAGS,
                 )
                 get_pip.unlink(missing_ok=True)
             except Exception as exc:
@@ -743,6 +759,7 @@ class Bootstrap:
             capture_output=True,
             text=True,
             timeout=600,
+            **_SUBPROCESS_FLAGS,
         )
         if result.returncode == 0:
             return None  # success
@@ -764,6 +781,7 @@ class Bootstrap:
             capture_output=True,
             text=True,
             timeout=600,
+            **_SUBPROCESS_FLAGS,
         )
         if result2.returncode == 0:
             return None
@@ -788,6 +806,7 @@ class Bootstrap:
             [venv_python, "-m", "pip", "install", "--upgrade", "pip", "--quiet"],
             capture_output=True,
             timeout=120,
+            **_SUBPROCESS_FLAGS,
         )
 
         cmd = [venv_python, "-m", "pip", "install"]
@@ -801,6 +820,7 @@ class Bootstrap:
             capture_output=True,
             text=True,
             timeout=600,
+            **_SUBPROCESS_FLAGS,
         )
         if result.returncode == 0:
             return None  # success
