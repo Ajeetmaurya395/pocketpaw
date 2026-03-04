@@ -13,7 +13,7 @@
 </script>
 
 {#if subflow === "ollama"}
-  <OllamaSetup onComplete={onNext} onBack={backToCards} />
+  <OllamaSetup onComplete={onNext} onBack={backToCards} onSwitchToApi={openApi} />
 {:else if subflow === "api"}
   <ApiKeySetup onComplete={onNext} onBack={backToCards} />
 {:else}

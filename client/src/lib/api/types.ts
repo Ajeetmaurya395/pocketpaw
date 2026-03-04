@@ -459,6 +459,12 @@ export interface WSDWProjectCancelled {
   title: string;
 }
 
+export interface WSOpenPath {
+  type: "open_path";
+  path: string;
+  action: "navigate" | "view";
+}
+
 export type WSEvent =
   | WSNotification
   | WSError
@@ -475,7 +481,8 @@ export type WSEvent =
   | WSMCActivityCreated
   | WSDWPlanningPhase
   | WSDWPlanningComplete
-  | WSDWProjectCancelled;
+  | WSDWProjectCancelled
+  | WSOpenPath;
 
 // -- SSE Events (from POST /chat/stream) ------------------------------------
 
@@ -501,6 +508,11 @@ export interface SSEThinking {
 export interface SSEStreamEnd {
   session_id: string;
   usage?: TokenUsage;
+}
+
+export interface SSEAskUser {
+  question: string;
+  options: Array<string | { label?: string; text?: string; description?: string }>;
 }
 
 export interface SSEError {

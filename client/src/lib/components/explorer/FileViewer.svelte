@@ -40,6 +40,10 @@
   const SPREADSHEET_EXTS = new Set(["csv", "tsv"]);
   const HTML_EXTS = new Set(["html", "htm"]);
   const PDF_EXTS = new Set(["pdf"]);
+  const NOTEBOOK_EXTS = new Set(["ipynb"]);
+  const MODEL_EXTS = new Set(["stl", "obj", "gltf", "glb"]);
+  const DOCUMENT_EXTS = new Set(["docx"]);
+  const XLSX_EXTS = new Set(["xlsx", "xls", "ods"]);
   const CODE_EXTS = new Set([
     "js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx",
     "py", "pyw", "pyi", "rs", "go", "c", "h", "cpp", "cxx", "cc", "hpp", "hxx",
@@ -63,6 +67,10 @@
     | "htmlpreview"
     | "code"
     | "pdf"
+    | "notebook"
+    | "model3d"
+    | "document"
+    | "xlsx"
     | "unknown";
 
   let ext = $derived(file.extension.toLowerCase());
@@ -75,6 +83,10 @@
     if (SPREADSHEET_EXTS.has(ext)) return "spreadsheet";
     if (HTML_EXTS.has(ext)) return "htmlpreview";
     if (PDF_EXTS.has(ext)) return "pdf";
+    if (NOTEBOOK_EXTS.has(ext)) return "notebook";
+    if (DOCUMENT_EXTS.has(ext)) return "document";
+    if (XLSX_EXTS.has(ext)) return "xlsx";
+    if (MODEL_EXTS.has(ext)) return "model3d";
     if (CODE_EXTS.has(ext)) return "code";
     // Files without extension — try as text
     if (!ext && !file.isDir) return "code";
@@ -105,8 +117,23 @@
         (e) => { error = String(e); loading = false; },
       );
     } else if (cat === "pdf") {
+      localFs.readFileBase64(path).then(
+        (url) => { base64Url = url; loading = false; },
+        (e) => { error = String(e); loading = false; },
+      );
+    } else if (cat === "notebook") {
+      localFs.readFileText(path).then(
+        (text) => { textContent = text; loading = false; },
+        (e) => { error = String(e); loading = false; },
+      );
+    } else if (cat === "model3d") {
       localFs.getFileSrc(path).then(
         (url) => { mediaSrc = url; loading = false; },
+        (e) => { error = String(e); loading = false; },
+      );
+    } else if (cat === "document" || cat === "xlsx") {
+      localFs.readFileBase64(path).then(
+        (url) => { base64Url = url; loading = false; },
         (e) => { error = String(e); loading = false; },
       );
     } else if (
@@ -151,10 +178,16 @@
         }
       } else if (cat === "image") {
         localFs.readFileBase64(path).then((url) => { base64Url = url; });
+      } else if (cat === "notebook") {
+        localFs.readFileText(path).then((text) => { textContent = text; });
+      } else if (cat === "document" || cat === "xlsx") {
+        localFs.readFileBase64(path).then((url) => { base64Url = url; });
       } else if (cat === "markdown" || cat === "spreadsheet" || cat === "htmlpreview") {
         localFs.readFileText(path).then((text) => { textContent = text; });
+      } else if (cat === "pdf") {
+        localFs.readFileBase64(path).then((url) => { base64Url = url; });
       }
-      // audio/video/pdf use asset URLs — the OS updates the file on disk, and the
+      // audio/video use asset URLs — the OS updates the file on disk, and the
       // webview will pick up the change on next seek/reload. No explicit action needed.
     }
   });
@@ -344,9 +377,25 @@
           ondirtychange={(d) => { unsavedChanges = d; }}
         />
       {/await}
-    {:else if fileCategory === "pdf" && mediaSrc}
+    {:else if fileCategory === "pdf" && base64Url}
       {#await import("./PdfViewer.svelte") then mod}
-        <mod.default src={mediaSrc} filename={file.name} />
+        <mod.default base64Url={base64Url} filename={file.name} />
+      {/await}
+    {:else if fileCategory === "notebook" && textContent !== null}
+      {#await import("./NotebookViewer.svelte") then mod}
+        <mod.default content={textContent} />
+      {/await}
+    {:else if fileCategory === "model3d" && mediaSrc}
+      {#await import("./ModelViewer.svelte") then mod}
+        <mod.default src={mediaSrc} extension={ext} />
+      {/await}
+    {:else if fileCategory === "document" && base64Url}
+      {#await import("./DocumentViewer.svelte") then mod}
+        <mod.default base64Url={base64Url} filename={file.name} />
+      {/await}
+    {:else if fileCategory === "xlsx" && base64Url}
+      {#await import("./SpreadsheetViewer.svelte") then mod}
+        <mod.default base64Url={base64Url} extension={ext} isBinary={true} />
       {/await}
     {:else}
       <!-- Unknown file type -->

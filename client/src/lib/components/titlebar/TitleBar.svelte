@@ -25,10 +25,10 @@
 
   const headerClass = $derived(
     isMac
-      ? "relative flex w-full shrink-0 items-center border-b border-border/50 h-[38px]"
+      ? "relative flex w-full shrink-0 items-center  h-[38px]"
       : os === "windows"
-        ? "relative flex w-full shrink-0 items-center border-b border-border/50 h-[32px]"
-        : "relative flex w-full shrink-0 items-center border-b border-border/50 h-[34px]",
+        ? "relative flex w-full shrink-0 items-center h-[32px]"
+        : "relative flex w-full shrink-0 items-center h-[34px]",
   );
 
   const leftZoneClass = $derived(
@@ -53,33 +53,27 @@
   data-tauri-drag-region
 >
   <!-- Left zone: sidebar toggle (+ macOS traffic light inset) -->
-  <div class={leftZoneClass}>
-    {#if onToggleSidebar}
-      <button
-        onclick={onToggleSidebar}
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-100 hover:bg-foreground/10 hover:text-foreground @[pointer:coarse]:h-9 @[pointer:coarse]:w-9"
-      >
-        <PanelLeft class="h-4 w-4" strokeWidth={1.75} />
-      </button>
-    {/if}
-  </div>
+  
+  <!-- Center zone: workspace tabs + session title + model badge -->
+  <div class="flex w-full justify-between">
+    <div class={leftZoneClass}>
+      {#if onToggleSidebar}
+        <button
+          onclick={onToggleSidebar}
+          class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors duration-100 hover:bg-foreground/10 hover:text-foreground @[pointer:coarse]:h-9 @[pointer:coarse]:w-9"
+        >
+          <PanelLeft class="h-4 w-4" strokeWidth={1.75} />
+        </button>
+      {/if}
+    </div>
+    <WorkspaceTabs />
 
-  <!-- Center zone: session title + model badge -->
-  <div class="flex min-w-0 flex-1 items-center gap-2 px-2">
-    <SessionTitle />
-    <span class="text-muted-foreground/40">&middot;</span>
-    <ModelBadge />
-  </div>
 
-  <!-- Right zone: quick actions + connection badge + window controls -->
+  <!-- Right zone: window controls -->
   <div class="flex items-center gap-0.5 pr-0.5">
-    <QuickActions />
-    <ConnectionBadge />
     {#if !isMac}
       <WindowControls platform={os} />
     {/if}
   </div>
-
-  <!-- Agent progress bar at bottom edge -->
-  <AgentProgressBar />
+ </div>
 </header>

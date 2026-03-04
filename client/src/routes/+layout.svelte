@@ -8,6 +8,7 @@
   import { Toaster } from "$lib/components/ui/sonner";
   import { Provider as TooltipProvider } from "$lib/components/ui/tooltip";
   import AppShell from "$lib/components/AppShell.svelte";
+  import SetupBackend from "$lib/components/onboarding/SetupBackend.svelte";
   import { initializeStores, activityStore, connectionStore, platformStore, sessionStore, chatStore, settingsStore } from "$lib/stores";
   import {
     isTauri,
@@ -39,7 +40,7 @@
   let isQuickAsk = $derived(page.url.pathname.startsWith("/quickask"));
   let isOAuthCallback = $derived(page.url.pathname.startsWith("/oauth-callback"));
 
-  type AuthState = "loading" | "authenticating" | "authenticated" | "error";
+  type AuthState = "loading" | "checking_backend" | "backend_missing" | "backend_stopped" | "installing" | "starting" | "authenticating" | "authenticated" | "error";
   let authState = $state<AuthState>("loading");
   let authError = $state<string | null>(null);
 
@@ -126,7 +127,7 @@
     if (pathname.startsWith("/sidepanel") || pathname.startsWith("/quickask") || pathname.startsWith("/oauth-callback")) return;
 
     if (!isTauri()) {
-      // Browser dev fallback
+      // Browser dev fallback — skip backend check entirely
       const token = "dev-token";
       await initializeStores(token);
       authState = "authenticated";
@@ -134,6 +135,33 @@
       return;
     }
 
+    // Step 1: Check if backend is running (TCP check)
+    authState = "checking_backend";
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const running = await invoke<boolean>("check_backend_running", { port: 8888 });
+
+      if (!running) {
+        // Backend not running — check if PocketPaw is installed
+        const status = await invoke<{
+          installed: boolean;
+          has_config_dir: boolean;
+          has_cli: boolean;
+          config_dir: string;
+        }>("check_pocketpaw_installed");
+
+        if (status.has_cli) {
+          authState = "backend_stopped";
+        } else {
+          authState = "backend_missing";
+        }
+        return; // SetupBackend component takes over
+      }
+    } catch {
+      // If Tauri commands fail, fall through to normal auth
+    }
+
+    // Step 2: Backend is running — proceed with auth
     // Read master token for WebSocket (WS only accepts master/session tokens, not OAuth)
     const masterToken = await readMasterToken();
 
@@ -262,13 +290,21 @@
   <TooltipProvider>
     {#if isSidePanel || isQuickAsk || isOAuthCallback}
       {@render children()}
-    {:else if authState === "loading"}
+    {:else if authState === "checking_backend" || authState === "loading"}
       <div class="flex h-dvh w-screen items-center justify-center bg-background">
         <div class="flex flex-col items-center gap-3">
           <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
-          <p class="text-sm text-muted-foreground">Connecting...</p>
+          <p class="text-sm text-muted-foreground">
+            {authState === "checking_backend" ? "Checking backend..." : "Connecting..."}
+          </p>
         </div>
       </div>
+    {:else if authState === "backend_missing" || authState === "backend_stopped" || authState === "installing" || authState === "starting"}
+      <SetupBackend backendState={authState} onReady={() => {
+        // Fresh install/start — force onboarding to re-run
+        localStorage.removeItem("pocketpaw_onboarded");
+        authenticate();
+      }} />
     {:else if authState === "authenticating"}
       <div class="flex h-dvh w-screen items-center justify-center bg-background">
         <div class="flex flex-col items-center gap-3">

@@ -1,24 +1,47 @@
 <script lang="ts">
   import { settingsStore } from "$lib/stores";
-  import { Loader2, RefreshCw, ExternalLink, Check } from "@lucide/svelte";
+  import { Loader2, RefreshCw, ExternalLink, Check, Cloud } from "@lucide/svelte";
   import { Progress } from "$lib/components/ui/progress";
+  import ModelSearch from "./ModelSearch.svelte";
 
-  let { onComplete, onBack }: { onComplete: () => void; onBack: () => void } = $props();
+  let { onComplete, onBack, onSwitchToApi }: {
+    onComplete: () => void;
+    onBack: () => void;
+    onSwitchToApi?: () => void;
+  } = $props();
 
   type OllamaModel = { name: string; size: number };
 
   let status = $state<"checking" | "not_found" | "found" | "pulling" | "done">("checking");
-  let models = $state<OllamaModel[]>([]);
-  let selectedModel = $state("llama3.2");
+  let rawModels = $state<OllamaModel[]>([]);
+  let selectedModel = $state("");
   let pullProgress = $state(0);
   let error = $state("");
 
-  const defaultModels = [
-    { id: "llama3.2", name: "Llama 3.2", desc: "Fast, versatile, 3B params" },
-    { id: "llama3.2:1b", name: "Llama 3.2 1B", desc: "Lightweight, fastest" },
-    { id: "mistral", name: "Mistral 7B", desc: "Strong reasoning" },
-    { id: "gemma2:2b", name: "Gemma 2 2B", desc: "Google, compact" },
+  const suggestedModels = [
+    { id: "deepseek-r1:8b", name: "DeepSeek R1 8B", desc: "Open reasoning model, compact" },
+    { id: "qwen3:8b", name: "Qwen 3 8B", desc: "Strong all-around, multilingual" },
+    { id: "llama3.1:8b", name: "Llama 3.1 8B", desc: "Meta, versatile" },
+    { id: "devstral", name: "Devstral", desc: "Mistral, optimized for coding" },
+    { id: "gemma2:2b", name: "Gemma 2 2B", desc: "Google, lightweight" },
+    { id: "phi3:mini", name: "Phi-3 Mini", desc: "Microsoft, compact 3B" },
   ];
+
+  // Merge installed models + suggested models into a single ModelSearch list
+  let searchModels = $derived.by(() => {
+    const installedNames = new Set(rawModels.map((m) => m.name));
+    const installed = rawModels.map((m) => ({
+      id: m.name,
+      name: m.name,
+      size: `${Math.round((m.size / 1e9) * 10) / 10} GB`,
+    }));
+    const suggested = suggestedModels
+      .filter((m) => !installedNames.has(m.id))
+      .map((m) => ({ id: m.id, name: m.name, desc: m.desc }));
+    return [...installed, ...suggested];
+  });
+
+  let installedNames = $derived(new Set(rawModels.map((m) => m.name)));
 
   async function checkOllama() {
     status = "checking";
@@ -27,7 +50,7 @@
       const res = await fetch("http://localhost:11434/api/tags");
       if (res.ok) {
         const data = await res.json();
-        models = data.models ?? [];
+        rawModels = data.models ?? [];
         status = "found";
       } else {
         status = "not_found";
@@ -80,7 +103,7 @@
 
       status = "done";
       saveAndContinue();
-    } catch (e) {
+    } catch {
       error = "Download failed. Check that Ollama is running.";
       status = "found";
     }
@@ -95,17 +118,21 @@
     onComplete();
   }
 
-  function selectExistingModel(name: string) {
-    selectedModel = name;
-    saveAndContinue();
+  function handleModelSelect(id: string) {
+    selectedModel = id;
+    if (installedNames.has(id)) {
+      // Already installed — save and continue immediately
+      saveAndContinue();
+    } else {
+      // Not installed — start pull
+      pullModel();
+    }
   }
 
   // Check on mount
   $effect(() => {
     checkOllama();
   });
-
-  let hasExistingModels = $derived(models.length > 0);
 </script>
 
 <div class="flex w-full max-w-md flex-col gap-5">
@@ -153,44 +180,23 @@
         </button>
       </div>
     </div>
-  {:else if status === "found"}
-    <div class="flex flex-col gap-3">
-      {#if hasExistingModels}
-        <div class="flex flex-col gap-1.5">
-          <p class="text-xs font-medium uppercase tracking-wider text-muted-foreground/60">
-            Installed Models
-          </p>
-          {#each models as model}
-            <button
-              onclick={() => selectExistingModel(model.name)}
-              class="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
-            >
-              <span class="font-medium text-foreground">{model.name}</span>
-              <span class="text-xs text-muted-foreground">
-                {Math.round(model.size / 1e9 * 10) / 10} GB
-              </span>
-            </button>
-          {/each}
-        </div>
-      {/if}
 
-      <div class="flex flex-col gap-1.5">
-        <p class="text-xs font-medium uppercase tracking-wider text-muted-foreground/60">
-          {hasExistingModels ? "Or download a model" : "Choose a model to download"}
-        </p>
-        {#each defaultModels as model}
-          <button
-            onclick={() => { selectedModel = model.id; pullModel(); }}
-            class="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
-          >
-            <div>
-              <span class="font-medium text-foreground">{model.name}</span>
-              <span class="ml-2 text-xs text-muted-foreground">{model.desc}</span>
-            </div>
-          </button>
-        {/each}
-      </div>
-    </div>
+    {#if onSwitchToApi}
+      <button
+        onclick={onSwitchToApi}
+        class="inline-flex items-center gap-1.5 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Cloud class="h-3 w-3" />
+        Use an API key instead
+      </button>
+    {/if}
+  {:else if status === "found"}
+    <ModelSearch
+      models={searchModels}
+      bind:selectedModel
+      placeholder="Search models..."
+      onSelect={handleModelSelect}
+    />
   {:else if status === "pulling"}
     <div class="flex flex-col gap-3 rounded-lg border border-border bg-muted/50 p-4">
       <div class="flex items-center gap-2">

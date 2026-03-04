@@ -39,7 +39,7 @@
 
 {#if platform === "windows"}
   <!-- Windows: Fluent-style rectangular buttons -->
-  <div class="flex h-full">
+  <div class="flex h-8">
     <button
       onclick={minimize}
       class="flex h-full w-[46px] items-center justify-center text-muted-foreground transition-colors duration-100 hover:bg-foreground/10"

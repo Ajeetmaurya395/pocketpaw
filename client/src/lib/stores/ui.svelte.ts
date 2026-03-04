@@ -8,11 +8,9 @@ class UIStore {
   }
 
   requestSearchFocus(): void {
-    // Open sidebar if closed
     if (!this.sidebarOpen) {
       this.sidebarOpen = true;
     }
-    // Increment counter to trigger focus effect
     this.searchFocusRequest++;
   }
 

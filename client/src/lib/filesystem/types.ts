@@ -21,6 +21,12 @@ export interface FileChangeEvent {
   is_dir: boolean;
 }
 
+export interface RecursiveSearchResult {
+  entries: FileEntry[];
+  totalScanned: number;
+  truncated: boolean;
+}
+
 export interface FileSystemProvider {
   scheme: "local" | "remote" | "cloud";
   readDir(path: string): Promise<FileEntry[]>;

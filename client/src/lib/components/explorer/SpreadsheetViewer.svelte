@@ -10,9 +10,13 @@
   let {
     content = "",
     extension = "csv",
+    base64Url = "",
+    isBinary = false,
   }: {
     content?: string;
     extension?: string;
+    base64Url?: string;
+    isBinary?: boolean;
   } = $props();
 
   let mode = $state<"table" | "source">("table");
@@ -21,7 +25,41 @@
   let sortAsc = $state(true);
   let copied = $state(false);
 
+  let sheetNames = $state<string[]>([]);
+  let activeSheet = $state(0);
+  let binarySheets = $state<string[][][]>([]);
+  let binaryLoading = $state(false);
+  let binaryError = $state<string | null>(null);
+
   let delimiter = $derived(extension.toLowerCase() === "tsv" ? "\t" : ",");
+
+  // Load binary xlsx/xls/ods files
+  $effect(() => {
+    if (!isBinary || !base64Url) return;
+    binaryLoading = true;
+    binaryError = null;
+    sheetNames = [];
+    binarySheets = [];
+    activeSheet = 0;
+
+    (async () => {
+      try {
+        const XLSX = await import("xlsx");
+        const { base64DataUrlToArrayBuffer } = await import("$lib/filesystem");
+        const ab = base64DataUrlToArrayBuffer(base64Url);
+        const workbook = XLSX.read(new Uint8Array(ab), { type: "array" });
+        sheetNames = workbook.SheetNames;
+        binarySheets = workbook.SheetNames.map((name) => {
+          const sheet = workbook.Sheets[name];
+          return XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1, defval: "" });
+        });
+        binaryLoading = false;
+      } catch (e) {
+        binaryError = e instanceof Error ? e.message : String(e);
+        binaryLoading = false;
+      }
+    })();
+  });
 
   // RFC 4180-ish CSV parser handling quoted fields
   function parseCsv(text: string, sep: string): string[][] {
@@ -76,7 +114,12 @@
     return rows;
   }
 
-  let allRows = $derived(parseCsv(content, delimiter));
+  let allRows = $derived.by(() => {
+    if (isBinary && binarySheets.length > 0) {
+      return (binarySheets[activeSheet] ?? []).map((row) => row.map(String));
+    }
+    return parseCsv(content, delimiter);
+  });
   let headers = $derived(allRows.length > 0 ? allRows[0] : []);
   let dataRows = $derived(allRows.slice(1));
   let colCount = $derived(headers.length);
@@ -210,6 +253,36 @@
       {/await}
     </div>
   {:else}
+    <!-- Sheet tabs for multi-sheet workbooks -->
+    {#if isBinary && sheetNames.length > 1}
+      <div class="flex gap-0.5 border-b border-border/50 px-3 py-1">
+        {#each sheetNames as name, i}
+          <button
+            type="button"
+            class={cn(
+              "rounded-t px-3 py-1 text-xs transition-colors",
+              activeSheet === i
+                ? "bg-muted text-foreground font-medium"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+            )}
+            onclick={() => { activeSheet = i; sortCol = -1; searchQuery = ""; }}
+          >
+            {name}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if binaryLoading}
+      <div class="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        Loading spreadsheet...
+      </div>
+    {:else if binaryError}
+      <div class="flex flex-1 items-center justify-center text-sm text-red-400">
+        {binaryError}
+      </div>
+    {/if}
+
     <!-- Table view -->
     <div class="flex-1 overflow-auto">
       {#if allRows.length === 0}

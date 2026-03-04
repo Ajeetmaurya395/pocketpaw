@@ -18,7 +18,6 @@
     {#if hasContent}
       <div class="text-sm leading-relaxed text-foreground">
         <MarkdownRenderer content={streamingContent} />
-        <span class="animate-cursor-blink ml-0.5 inline-block h-4 w-[2px] translate-y-[2px] bg-foreground"></span>
       </div>
     {/if}
 

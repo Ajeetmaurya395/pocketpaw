@@ -2,6 +2,7 @@
   import type { ChatMessage } from "$lib/api";
   import { Check, Copy, RefreshCw } from "@lucide/svelte";
   import { platformStore } from "$lib/stores";
+  import { chatStore } from "$lib/stores/chat.svelte";
   import MarkdownRenderer from "./MarkdownRenderer.svelte";
   import ActionButtons from "./ActionButtons.svelte";
 
@@ -55,6 +56,19 @@
     <div class="text-sm leading-relaxed text-foreground">
       <MarkdownRenderer content={message.content} />
     </div>
+
+    {#if message.metadata?.askUser && Array.isArray(message.metadata.options)}
+      <div class="mt-2 flex flex-wrap gap-2">
+        {#each message.metadata.options as opt}
+          <button
+            onclick={() => chatStore.answerAskUser(String(opt))}
+            class="rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+          >
+            {opt}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <ActionButtons {actions} />
 

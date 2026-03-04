@@ -5,13 +5,13 @@
   import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
   import { Separator } from "$lib/components/ui/separator";
   import FilePreview from "./FilePreview.svelte";
+  import { localFs, getFileName, getExtension, isImageFile } from "$lib/filesystem";
 
   let { initialValue = "" }: { initialValue?: string } = $props();
 
   let inputValue = $state("");
   let textareaEl: HTMLTextAreaElement | null = $state(null);
-  let attachedFiles = $state<{ name: string; type: string; size: number; file: File }[]>([]);
-  let isDragOver = $state(false);
+  let attachedFiles = $state<{ name: string; type: string; size: number; file: File; path?: string; data?: string }[]>([]);
 
   // Sync initialValue prop into state
   $effect(() => {
@@ -97,7 +97,7 @@
     input.click();
   }
 
-  function addFiles(files: File[]) {
+  export function addFiles(files: File[]) {
     for (const file of files) {
       if (attachedFiles.length >= 10) break;
       attachedFiles.push({
@@ -114,21 +114,47 @@
     attachedFiles = attachedFiles.filter((_, i) => i !== index);
   }
 
-  function handleDragOver(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = true;
+  function mimeFromExtension(ext: string): string {
+    const map: Record<string, string> = {
+      png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
+      gif: "image/gif", webp: "image/webp", svg: "image/svg+xml",
+      bmp: "image/bmp", ico: "image/x-icon", avif: "image/avif",
+      pdf: "application/pdf",
+      txt: "text/plain", md: "text/markdown", csv: "text/csv",
+      json: "application/json", js: "text/javascript", ts: "text/typescript",
+      py: "text/x-python", html: "text/html", css: "text/css",
+      xml: "text/xml", yaml: "text/yaml", yml: "text/yaml",
+    };
+    return map[ext.toLowerCase()] ?? "application/octet-stream";
   }
 
-  function handleDragLeave() {
-    isDragOver = false;
-  }
+  export async function addExplorerFiles(paths: string[]) {
+    for (const filePath of paths) {
+      if (attachedFiles.length >= 10) break;
+      try {
+        const stat = await localFs.stat(filePath);
+        if (stat.isDir) continue;
 
-  function handleDrop(e: DragEvent) {
-    e.preventDefault();
-    isDragOver = false;
-    if (e.dataTransfer?.files) {
-      addFiles(Array.from(e.dataTransfer.files));
+        const name = getFileName(filePath);
+        const ext = getExtension(filePath);
+        const mime = mimeFromExtension(ext);
+
+        let data: string | undefined;
+        if (isImageFile(ext)) {
+          try {
+            data = await localFs.readFileBase64(filePath);
+          } catch {
+            // Skip preview if read fails
+          }
+        }
+
+        const file = new File([], name, { type: mime });
+        attachedFiles.push({ name, type: mime, size: stat.size ?? 0, file, path: filePath, data });
+      } catch {
+        console.error("Failed to attach explorer file:", filePath);
+      }
     }
+    attachedFiles = attachedFiles;
   }
 
   function stopGeneration() {
@@ -154,72 +180,59 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class={isDragOver
-    ? "border-t-2 border-primary bg-paw-accent-subtle px-4 py-3"
-    : "px-4 py-3 "}
-  ondragover={handleDragOver}
-  ondragleave={handleDragLeave}
-  ondrop={handleDrop}
->
-  {#if isDragOver}
-    <div class="flex items-center justify-center py-4">
-      <p class="text-sm font-medium text-primary">Drop files here</p>
-    </div>
-  {:else}
-    <div class="mx-auto max-w-3xl">
-      <!-- Attached files -->
-      {#if attachedFiles.length > 0}
-        <div class="mb-2 flex flex-wrap gap-1.5">
-          {#each attachedFiles as file, i}
-            <FilePreview
-              file={{ name: file.name, type: file.type, size: file.size }}
-              removable
-              onRemove={() => removeFile(i)}
-            />
-          {/each}
-        </div>
-      {/if}
+<div class="p-2 pt-0">
+  <div class="mx-auto max-w-3xl bg-transparent">
+    <!-- Attached files -->
+    {#if attachedFiles.length > 0}
+      <div class="mb-2 flex flex-wrap gap-1.5">
+        {#each attachedFiles as file, i}
+          <FilePreview
+            file={{ name: file.name, type: file.type, size: file.size, data: file.data }}
+            removable
+            onRemove={() => removeFile(i)}
+          />
+        {/each}
+      </div>
+    {/if}
 
-      <InputGroup.Root>
-        <InputGroup.Textarea
-          bind:ref={textareaEl}
-          bind:value={inputValue}
-          onkeydown={handleKeydown}
-          placeholder={isConnected ? "Ask, search, or run a skill..." : "Connecting..."}
-          disabled={!isConnected}
-        />
-        <InputGroup.Addon align="block-end">
-          <InputGroup.Button
-            variant="outline"
-            class="rounded-full"
-            size="icon-xs"
-            onclick={openFilePicker}
-            disabled={isStreaming}
-          >
-            <Plus />
-          </InputGroup.Button>
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              {#snippet child({ props })}
-                <InputGroup.Button {...props} variant="ghost">
-                  <Brain class="mr-1 h-3 w-3" />
-                  {#if planMode}Plan{:else}Chat{/if}
-                </InputGroup.Button>
-              {/snippet}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content side="top" align="start" class="[--radius:0.95rem]">
-              <DropdownMenu.Item onclick={togglePlanMode}>
-                <Brain class="mr-2 h-3.5 w-3.5" />
-                {planMode ? "Disable" : "Enable"} Plan Mode
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onclick={toggleWebSearch}>
-                <Search class="mr-2 h-3.5 w-3.5" />
-                {webSearch ? "Disable" : "Enable"} Smart Routing
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
+    <InputGroup.Root class="border-border/50 shadow-none backdrop-blur-md">
+      <InputGroup.Textarea
+        bind:ref={textareaEl}
+        bind:value={inputValue}
+        onkeydown={handleKeydown}
+        placeholder={isConnected ? "Ask, search, or run a skill..." : "Connecting..."}
+        disabled={!isConnected}
+      />
+      <InputGroup.Addon align="block-end">
+        <InputGroup.Button
+          variant="outline"
+          class="rounded-full"
+          size="icon-xs"
+          onclick={openFilePicker}
+          disabled={isStreaming}
+        >
+          <Plus />
+        </InputGroup.Button>
+        <!-- <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <InputGroup.Button {...props} variant="ghost">
+                <Brain class="mr-1 h-3 w-3" />
+                {#if planMode}Plan{:else}Chat{/if}
+              </InputGroup.Button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content side="top" align="start" class="[--radius:0.95rem]">
+            <DropdownMenu.Item onclick={togglePlanMode}>
+              <Brain class="mr-2 h-3.5 w-3.5" />
+              {planMode ? "Disable" : "Enable"} Plan Mode
+            </DropdownMenu.Item>
+            <DropdownMenu.Item onclick={toggleWebSearch}>
+              <Search class="mr-2 h-3.5 w-3.5" />
+              {webSearch ? "Disable" : "Enable"} Smart Routing
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+          </DropdownMenu.Root> -->
           <div class="ms-auto flex items-center gap-1">
             {#if activeModel}
               <InputGroup.Text class="text-muted-foreground">
@@ -233,41 +246,40 @@
               </InputGroup.Text>
             {/if}
           </div>
-          {#if fileContextLabel}
-            <InputGroup.Text class="text-muted-foreground">
-              {#if explorerStore.openFile}
-                <FileText class="mr-0.5 h-3 w-3" />
-              {:else}
-                <FolderOpen class="mr-0.5 h-3 w-3" />
-              {/if}
-              <span class="max-w-20 truncate">{fileContextLabel}</span>
-            </InputGroup.Text>
-          {/if}
-          <Separator orientation="vertical" class="!h-4" />
-          {#if isStreaming}
-            <InputGroup.Button
-              variant="outline"
-              class="rounded-full"
-              size="icon-xs"
-              onclick={stopGeneration}
-            >
-              <X />
-              <span class="sr-only">Stop</span>
-            </InputGroup.Button>
-          {:else}
-            <InputGroup.Button
-              variant="default"
-              class="rounded-full"
-              size="icon-xs"
-              disabled={!canSend}
-              onclick={handleSubmit}
-            >
-              <ArrowUp />
-              <span class="sr-only">Send</span>
-            </InputGroup.Button>
-          {/if}
-        </InputGroup.Addon>
-      </InputGroup.Root>
-    </div>
-  {/if}
+        {#if fileContextLabel}
+          <InputGroup.Text class=" flex items-center gap-0.5 bg-card/50 p-2 rounded">
+            {#if explorerStore.openFile}
+              <FileText class="mr-0.5 h-3 w-3" />
+            {:else}
+              <FolderOpen class="mr-0.5 h-3 w-3" />
+            {/if}
+            <span class="max-w-20 truncate line-clamp-1">{fileContextLabel}</span>
+          </InputGroup.Text>
+        {/if}
+        <Separator orientation="vertical" class="!h-4" />
+        {#if isStreaming}
+          <InputGroup.Button
+            variant="outline"
+            class="rounded-full"
+            size="icon-xs"
+            onclick={stopGeneration}
+          >
+            <X />
+            <span class="sr-only">Stop</span>
+          </InputGroup.Button>
+        {:else}
+          <InputGroup.Button
+            variant="default"
+            class="rounded-full"
+            size="icon-xs"
+            disabled={!canSend}
+            onclick={handleSubmit}
+          >
+            <ArrowUp />
+            <span class="sr-only">Send</span>
+          </InputGroup.Button>
+        {/if}
+      </InputGroup.Addon>
+    </InputGroup.Root>
+  </div>
 </div>

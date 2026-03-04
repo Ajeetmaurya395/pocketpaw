@@ -25,6 +25,10 @@ class ChatStore {
   streamingStatus = $state<string | null>(null);
   error = $state<string | null>(null);
 
+  /** Pending AskUserQuestion state */
+  pendingAskQuestion = $state<string | null>(null);
+  pendingAskOptions = $state<string[]>([]);
+
   isEmpty = $derived(this.messages.length === 0);
   lastMessage = $derived(this.messages.at(-1) ?? null);
 
@@ -94,6 +98,13 @@ class ChatStore {
 
     // Re-send via REST SSE
     this.streamChat(userContent, userMedia);
+  }
+
+  /** Answer an AskUserQuestion prompt — sends the chosen option as a chat message. */
+  answerAskUser(answer: string): void {
+    this.pendingAskQuestion = null;
+    this.pendingAskOptions = [];
+    this.sendMessage(answer);
   }
 
   stopGeneration(): void {
@@ -184,6 +195,18 @@ class ChatStore {
               tool: data.tool,
               input: data.input,
             });
+
+            // Auto-open file viewer for PDFs and images the agent reads
+            if (data.tool === "Read" && data.input?.file_path) {
+              const fp = String(data.input.file_path);
+              const ext = (fp.split(".").pop() || "").toLowerCase();
+              const viewable = new Set([
+                "pdf", "jpg", "jpeg", "png", "gif", "svg", "webp", "bmp",
+              ]);
+              if (viewable.has(ext)) {
+                explorerStore.openFileByPath(fp);
+              }
+            }
           },
           onToolResult: (data) => {
             this.streamingStatus = "Thinking...";
@@ -191,6 +214,15 @@ class ChatStore {
               tool: data.tool,
               output: data.output,
             });
+          },
+          onAskUser: (data) => {
+            // Just store the options — they'll be attached to the final
+            // message in finalizeStream so nothing gets split.
+            const optLabels = (data.options || []).map((o: unknown) =>
+              typeof o === "string" ? o : (o as Record<string, string>).label || (o as Record<string, string>).text || "Option",
+            );
+            this.pendingAskOptions = optLabels;
+            this.pendingAskQuestion = data.question || "";
           },
           onStreamEnd: (data) => {
             // Capture token usage before finalizeStream resets sseActive
@@ -245,15 +277,22 @@ class ChatStore {
 
   private finalizeStream(): void {
     if (this.streamingContent) {
-      this.messages.push({
+      const msg: ChatMessage = {
         role: "assistant",
         content: this.streamingContent,
         timestamp: new Date().toISOString(),
-      });
+      };
+      // Attach pending AskUserQuestion options to this message
+      if (this.pendingAskOptions.length > 0) {
+        msg.metadata = { askUser: true, options: [...this.pendingAskOptions] };
+      }
+      this.messages.push(msg);
     }
     this.isStreaming = false;
     this.streamingContent = "";
     this.streamingStatus = null;
+    this.pendingAskQuestion = null;
+    this.pendingAskOptions = [];
 
     // Reset activity store SSE state
     activityStore.isAgentWorking = false;

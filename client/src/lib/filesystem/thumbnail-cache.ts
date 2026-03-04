@@ -12,6 +12,10 @@ export function isImageFile(ext: string): boolean {
   return IMAGE_EXTENSIONS.has(ext.toLowerCase());
 }
 
+export function isPdfFile(ext: string): boolean {
+  return ext.toLowerCase() === "pdf";
+}
+
 interface ThumbnailResult {
   data_url: string;
   width: number;

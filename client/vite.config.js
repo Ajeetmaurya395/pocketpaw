@@ -30,6 +30,9 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  optimizeDeps: {
+    include: ["pdfjs-dist", "three"],
+  },
   resolve: {
     alias: {
       $lib: path.resolve("./src/lib"),

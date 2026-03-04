@@ -82,8 +82,8 @@
     <button
       onclick={scrollToBottom}
       class={platformStore.isTouch
-        ? "absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background px-4 py-2.5 text-sm text-muted-foreground shadow-md transition-colors active:bg-accent active:text-foreground"
-        : "absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-xs text-muted-foreground shadow-md transition-colors hover:bg-accent hover:text-foreground"}
+        ? "absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card/50 px-4 py-2.5 text-sm text-muted-foreground"
+        : "absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card/50 backdrop-blur-sm px-3 py-1.5 text-xs text-foreground"}
     >
       <ArrowDown class="h-3 w-3" />
       New messages

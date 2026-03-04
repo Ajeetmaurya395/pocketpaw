@@ -12,7 +12,7 @@
     agent_id?: string;
   }
 
-  let items = $derived<FeedItem[]>(() => {
+  let items = $derived.by<FeedItem[]>(() => {
     if (!Array.isArray(data)) return [];
     return (data as FeedItem[]).slice(0, maxItems);
   });
@@ -31,14 +31,14 @@
 </script>
 
 <div class="flex flex-col gap-1">
-  {#each items() as item, i (i)}
+  {#each items as item, i (i)}
     <div class="flex items-start gap-2 rounded-md px-2 py-1.5 text-sm">
       <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-foreground/40"></span>
       <span class="flex-1 text-xs text-foreground/80">{item.message}</span>
       <span class="shrink-0 text-[10px] text-muted-foreground">{relativeTime(item.created_at)}</span>
     </div>
   {/each}
-  {#if items().length === 0}
+  {#if items.length === 0}
     <p class="py-4 text-center text-xs text-muted-foreground">No activity yet</p>
   {/if}
 </div>

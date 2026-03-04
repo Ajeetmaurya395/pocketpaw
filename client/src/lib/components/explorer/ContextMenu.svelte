@@ -1,23 +1,14 @@
 <script lang="ts">
   import type { FileEntry } from "$lib/filesystem";
-  import { localFs, joinPath } from "$lib/filesystem";
+  import { localFs } from "$lib/filesystem";
   import { explorerStore } from "$lib/stores";
   import { onMount } from "svelte";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Eye from "@lucide/svelte/icons/eye";
   import Trash2 from "@lucide/svelte/icons/trash-2";
-  import Pencil from "@lucide/svelte/icons/pencil";
-  import Copy from "@lucide/svelte/icons/copy";
-  import Pin from "@lucide/svelte/icons/pin";
   import ExternalLink from "@lucide/svelte/icons/external-link";
-  import FolderPlus from "@lucide/svelte/icons/folder-plus";
-  import CheckSquare from "@lucide/svelte/icons/check-square";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
-  import Scissors from "@lucide/svelte/icons/scissors";
-  import ClipboardPaste from "@lucide/svelte/icons/clipboard-paste";
-  import FilePlus from "@lucide/svelte/icons/file-plus";
   import Terminal from "@lucide/svelte/icons/terminal";
-  import Info from "@lucide/svelte/icons/info";
   import { cn } from "$lib/utils";
 
   let {
@@ -25,13 +16,11 @@
     y,
     file,
     onClose,
-    onShowProperties,
   }: {
     x: number;
     y: number;
     file: FileEntry | null;
     onClose: () => void;
-    onShowProperties?: (path: string) => void;
   } = $props();
 
   let menuRef = $state<HTMLDivElement | null>(null);
@@ -68,7 +57,7 @@
     let ay = y;
     if (typeof window !== "undefined") {
       const menuWidth = 200;
-      const menuHeight = file ? 300 : 160;
+      const menuHeight = file ? 200 : 100;
       if (ax + menuWidth > window.innerWidth) ax = window.innerWidth - menuWidth - 8;
       if (ay + menuHeight > window.innerHeight) ay = window.innerHeight - menuHeight - 8;
     }
@@ -78,50 +67,7 @@
   let items = $derived.by((): MenuEntry[] => {
     if (!file) {
       // Background context menu
-      const bgItems: MenuEntry[] = [
-        {
-          label: "New Folder",
-          icon: FolderPlus,
-          action: () => {
-            const name = prompt("New folder name:");
-            if (name) explorerStore.createFolder(name);
-            onClose();
-          },
-        },
-        {
-          label: "New File",
-          icon: FilePlus,
-          action: async () => {
-            const name = prompt("New file name:");
-            if (name && explorerStore.currentPath) {
-              await localFs.writeFile(joinPath(explorerStore.currentPath, name), "");
-              explorerStore.refresh();
-            }
-            onClose();
-          },
-        },
-        "separator",
-      ];
-      if (explorerStore.clipboardFiles.size > 0) {
-        bgItems.push({
-          label: "Paste",
-          icon: ClipboardPaste,
-          action: () => {
-            explorerStore.paste();
-            onClose();
-          },
-        });
-        bgItems.push("separator");
-      }
-      bgItems.push(
-        {
-          label: "Select All",
-          icon: CheckSquare,
-          action: () => {
-            explorerStore.selectAll();
-            onClose();
-          },
-        },
+      return [
         {
           label: "Refresh",
           icon: RefreshCw,
@@ -139,13 +85,12 @@
             onClose();
           },
         },
-      );
-      return bgItems;
+      ];
     }
 
     const result: MenuEntry[] = [];
 
-    // Group 1: Open actions
+    // Open action
     if (file.isDir) {
       result.push({
         label: "Open",
@@ -180,66 +125,8 @@
       },
     });
 
-    result.push("separator");
-
-    // Group 2: Clipboard / Pin
-    result.push({
-      label: "Copy Path",
-      icon: Copy,
-      action: () => {
-        navigator.clipboard.writeText(file.path);
-        onClose();
-      },
-    });
-
-    result.push({
-      label: "Copy",
-      icon: Copy,
-      action: () => {
-        if (!explorerStore.selectedFiles.has(file.path)) {
-          explorerStore.selectFile(file.path);
-        }
-        explorerStore.copyToClipboard();
-        onClose();
-      },
-    });
-
-    result.push({
-      label: "Cut",
-      icon: Scissors,
-      action: () => {
-        if (!explorerStore.selectedFiles.has(file.path)) {
-          explorerStore.selectFile(file.path);
-        }
-        explorerStore.cutToClipboard();
-        onClose();
-      },
-    });
-
     if (file.isDir) {
-      result.push({
-        label: "Pin to Home",
-        icon: Pin,
-        action: () => {
-          explorerStore.pinFolder(file.path, file.name, file.source);
-          onClose();
-        },
-      });
-    }
-
-    result.push("separator");
-
-    // Group 3: Rename
-    result.push({
-      label: "Rename",
-      icon: Pencil,
-      action: () => {
-        explorerStore.startRename(file.path);
-        onClose();
-      },
-    });
-
-    if (file.isDir) {
+      result.push("separator");
       result.push({
         label: "Open in Terminal",
         icon: Terminal,
@@ -250,18 +137,9 @@
       });
     }
 
-    result.push({
-      label: "Properties",
-      icon: Info,
-      action: () => {
-        onShowProperties?.(file.path);
-        onClose();
-      },
-    });
-
     result.push("separator");
 
-    // Group 4: Delete
+    // Delete
     result.push({
       label: "Delete",
       icon: Trash2,

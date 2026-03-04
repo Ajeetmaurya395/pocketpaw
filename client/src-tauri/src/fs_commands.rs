@@ -156,6 +156,19 @@ pub fn fs_read_file_base64(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, b64))
 }
 
+/// Read up to `max_bytes` from the beginning of a file and return as UTF-8 text.
+/// Invalid UTF-8 sequences are replaced with the Unicode replacement character.
+#[tauri::command]
+pub fn fs_read_file_head(path: String, max_bytes: usize) -> Result<String, String> {
+    use std::io::Read;
+    let file = fs::File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = vec![0u8; max_bytes];
+    let n = reader.read(&mut buf).map_err(|e| format!("Failed to read file: {}", e))?;
+    buf.truncate(n);
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// Resolve a (possibly relative) path against an optional base directory.
 /// Returns the canonicalized absolute path string.
 #[tauri::command]
@@ -294,6 +307,108 @@ pub fn fs_stat_extended(path: String) -> Result<FileStatExtended, String> {
         extension,
         readonly,
         is_symlink,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct RecursiveSearchResult {
+    pub entries: Vec<FileEntry>,
+    pub total_scanned: u64,
+    pub truncated: bool,
+}
+
+#[tauri::command]
+pub fn fs_search_recursive(
+    root_path: String,
+    query: String,
+    max_results: Option<usize>,
+    max_depth: Option<usize>,
+) -> Result<RecursiveSearchResult, String> {
+    use walkdir::WalkDir;
+
+    let max_results = max_results.unwrap_or(500);
+    let max_depth = max_depth.unwrap_or(10);
+    let query_lower = query.to_lowercase();
+
+    static SKIP_DIRS: &[&str] = &[
+        ".git", "node_modules", "target", "__pycache__", ".venv",
+        ".next", ".nuxt", "dist", "build", ".cache", ".svelte-kit",
+    ];
+
+    let mut entries = Vec::with_capacity(256);
+    let mut total_scanned: u64 = 0;
+    let mut truncated = false;
+
+    let walker = WalkDir::new(&root_path)
+        .max_depth(max_depth)
+        .follow_links(false)
+        .into_iter();
+
+    for entry in walker.filter_entry(|e| {
+        if e.file_type().is_dir() {
+            if let Some(name) = e.file_name().to_str() {
+                if name.starts_with('.') || SKIP_DIRS.contains(&name) {
+                    return false;
+                }
+            }
+        }
+        true
+    }) {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if entry.depth() == 0 {
+            continue;
+        }
+
+        total_scanned += 1;
+
+        let name_os = entry.file_name();
+        let name = name_os.to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        if name.to_lowercase().contains(&query_lower) {
+            // Use walkdir's cached metadata instead of a second stat() syscall
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let modified = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let path = entry.path();
+            let extension = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            entries.push(FileEntry {
+                name: name.into_owned(),
+                path: path_to_string(path),
+                is_dir: meta.is_dir(),
+                size: meta.len(),
+                modified,
+                extension,
+            });
+
+            if entries.len() >= max_results {
+                truncated = true;
+                break;
+            }
+        }
+    }
+
+    Ok(RecursiveSearchResult {
+        entries,
+        total_scanned,
+        truncated,
     })
 }
 

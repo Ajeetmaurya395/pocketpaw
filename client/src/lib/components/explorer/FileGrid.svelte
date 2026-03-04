@@ -3,14 +3,12 @@
   import { localFs, joinPath, getFileName } from "$lib/filesystem";
   import FileCard from "./FileCard.svelte";
   import ContextMenu from "./ContextMenu.svelte";
-  import PropertiesDialog from "./PropertiesDialog.svelte";
   import type { FileEntry } from "$lib/filesystem";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
 
   const DRAG_MIME = "application/x-pocketpaw-files";
 
   let contextMenu = $state<{ x: number; y: number; file: FileEntry | null } | null>(null);
-  let propertiesPath = $state<string | null>(null);
 
   function handleClick(file: FileEntry, e: MouseEvent) {
     explorerStore.selectFile(file.path, e.ctrlKey || e.metaKey);
@@ -49,7 +47,8 @@
       : [file.path];
     const mode = e.shiftKey ? "copy" : "move";
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ paths, mode }));
-    e.dataTransfer.effectAllowed = e.shiftKey ? "copy" : "move";
+    e.dataTransfer.setData("text/plain", paths.join("\n"));
+    e.dataTransfer.effectAllowed = "copyMove";
   }
 
   async function handleFileDrop(targetDir: string, e: DragEvent) {
@@ -80,9 +79,9 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="h-full" onclick={handleBackgroundClick} oncontextmenu={handleBackgroundContextMenu}>
   {#if explorerStore.isLoading}
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-2 p-2">
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 p-2">
       {#each Array(12) as _}
-        <div class="flex w-40 animate-pulse flex-col items-center gap-1 rounded-lg p-3">
+        <div class="flex w-full animate-pulse flex-col items-center gap-1 rounded-lg p-3">
           <div class="h-20 w-full rounded-md bg-muted/30"></div>
           <div class="h-4 w-3/4 rounded bg-muted/30"></div>
           <div class="h-3 w-1/2 rounded bg-muted/20"></div>
@@ -108,7 +107,7 @@
       </p>
     </div>
   {:else}
-    <div class="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-2 p-2">
+    <div class="grid grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-2 p-2">
       {#each explorerStore.sortedFiles as file, i (file.path)}
         <FileCard
           {file}
@@ -133,10 +132,5 @@
     y={contextMenu.y}
     file={contextMenu.file}
     onClose={() => (contextMenu = null)}
-    onShowProperties={(path) => { propertiesPath = path; }}
   />
-{/if}
-
-{#if propertiesPath}
-  <PropertiesDialog filePath={propertiesPath} onClose={() => { propertiesPath = null; }} />
 {/if}

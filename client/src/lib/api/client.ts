@@ -19,6 +19,7 @@ import {
   type MemoryStats,
   type Reminder,
   type RemindersResponse,
+  type SSEAskUser,
   type SSEChunk,
   type SSEError,
   type SSEStreamEnd,
@@ -244,6 +245,7 @@ export class PocketPawClient {
       onToolStart?: (data: SSEToolStart) => void;
       onToolResult?: (data: SSEToolResult) => void;
       onThinking?: (data: SSEThinking) => void;
+      onAskUser?: (data: SSEAskUser) => void;
       onStreamEnd?: (data: SSEStreamEnd) => void;
       onError?: (data: SSEError) => void;
     },
@@ -301,6 +303,9 @@ export class PocketPawClient {
                 break;
               case "thinking":
                 handlers.onThinking?.(data);
+                break;
+              case "ask_user_question":
+                handlers.onAskUser?.(data);
                 break;
               case "stream_end":
                 handlers.onStreamEnd?.(data);

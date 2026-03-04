@@ -1,5 +1,4 @@
 <script lang="ts">
-  import StepWelcome from "./StepWelcome.svelte";
   import StepChooseAI from "./StepChooseAI.svelte";
   import StepReady from "./StepReady.svelte";
 
@@ -13,7 +12,7 @@
 <div class="flex h-full w-full flex-col items-center justify-center px-6">
   <!-- Step indicator -->
   <div class="mb-8 flex items-center gap-2">
-    {#each [1, 2, 3] as step}
+    {#each [1, 2] as step}
       <div
         class={step === currentStep
           ? "h-1.5 w-6 rounded-full bg-primary"
@@ -26,10 +25,8 @@
 
   <!-- Step content -->
   {#if currentStep === 1}
-    <StepWelcome onNext={next} />
-  {:else if currentStep === 2}
     <StepChooseAI onNext={next} />
-  {:else if currentStep === 3}
+  {:else if currentStep === 2}
     <StepReady />
   {/if}
 </div>

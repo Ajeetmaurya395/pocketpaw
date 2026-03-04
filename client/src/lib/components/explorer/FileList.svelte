@@ -3,7 +3,6 @@
   import { localFs, joinPath, getFileName } from "$lib/filesystem";
   import FileListRow from "./FileListRow.svelte";
   import ContextMenu from "./ContextMenu.svelte";
-  import PropertiesDialog from "./PropertiesDialog.svelte";
   import type { FileEntry } from "$lib/filesystem";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
@@ -13,7 +12,6 @@
   const DRAG_MIME = "application/x-pocketpaw-files";
 
   let contextMenu = $state<{ x: number; y: number; file: FileEntry | null } | null>(null);
-  let propertiesPath = $state<string | null>(null);
 
   function handleClick(file: FileEntry, e: MouseEvent) {
     explorerStore.selectFile(file.path, e.ctrlKey || e.metaKey);
@@ -56,7 +54,8 @@
       : [file.path];
     const mode = e.shiftKey ? "copy" : "move";
     e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ paths, mode }));
-    e.dataTransfer.effectAllowed = e.shiftKey ? "copy" : "move";
+    e.dataTransfer.setData("text/plain", paths.join("\n"));
+    e.dataTransfer.effectAllowed = "copyMove";
   }
 
   async function handleFileDrop(targetDir: string, e: DragEvent) {
@@ -186,10 +185,5 @@
     y={contextMenu.y}
     file={contextMenu.file}
     onClose={() => (contextMenu = null)}
-    onShowProperties={(path) => { propertiesPath = path; }}
   />
-{/if}
-
-{#if propertiesPath}
-  <PropertiesDialog filePath={propertiesPath} onClose={() => { propertiesPath = null; }} />
 {/if}

@@ -12,6 +12,7 @@ import { mcStore } from "./mission-control.svelte";
 import { projectStore } from "./projects.svelte";
 
 export { connectionStore, chatStore, sessionStore, settingsStore, activityStore, skillStore, uiStore, platformStore, explorerStore, kitStore, mcStore, projectStore };
+export type { FileTypeCategory, ExplorerTab } from "./explorer.svelte";
 export type { ActivityEntry } from "./activity.svelte";
 export type { ActiveExecution, ExecutionLogEntry } from "./mission-control.svelte";
 export type { PlanningPhase } from "./projects.svelte";
@@ -31,8 +32,9 @@ export async function initializeStores(token: string, baseUrl?: string, wsToken?
     settingsStore.load(),
   ]);
 
-  // Initialize explorer store (loads default dirs, pinned folders)
+  // Initialize explorer store (loads default dirs, pinned folders, WS events)
   explorerStore.initialize();
+  explorerStore.bindEvents();
 
   // Load installed kits in background
   kitStore.load();
