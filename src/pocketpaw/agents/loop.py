@@ -359,6 +359,22 @@ class AgentLoop:
                             )
                         )
 
+                        # AskUserQuestion — forward the question to the
+                        # client so the user can see and answer it.
+                        if tool_name == "AskUserQuestion":
+                            question = tool_input.get("question", "")
+                            options = tool_input.get("options", [])
+                            await self.bus.publish_system(
+                                SystemEvent(
+                                    event_type="ask_user_question",
+                                    data={
+                                        "question": question,
+                                        "options": options,
+                                        "session_key": session_key,
+                                    },
+                                )
+                            )
+
                     elif etype == "tool_result":
                         tool_name = meta.get("name") or meta.get("tool", "unknown")
                         await self.bus.publish_system(

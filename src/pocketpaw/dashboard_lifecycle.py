@@ -97,6 +97,25 @@ async def _broadcast_health_update(summary: dict):
                 active_connections.remove(ws)
 
 
+async def push_open_path(path: str, action: str = "navigate"):
+    """Push an open_path event to all connected WebSocket clients.
+
+    Parameters
+    ----------
+    path:
+        Absolute filesystem path to open.
+    action:
+        ``"navigate"`` to open a folder in the explorer, or
+        ``"view"`` to open a file in the viewer.
+    """
+    message = {"type": "open_path", "path": path, "action": action}
+    for ws in active_connections[:]:
+        try:
+            await ws.send_json(message)
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------

@@ -131,6 +131,16 @@ class _APISessionBridge:
                 await self.queue.put(
                     {"event": "thinking", "data": {"content": data.get("content", "")}}
                 )
+            elif evt.event_type == "ask_user_question":
+                await self.queue.put(
+                    {
+                        "event": "ask_user_question",
+                        "data": {
+                            "question": data.get("question", ""),
+                            "options": data.get("options", []),
+                        },
+                    }
+                )
             elif evt.event_type == "error":
                 await self.queue.put(
                     {"event": "error", "data": {"detail": data.get("message", "")}}
@@ -199,7 +209,8 @@ async def chat_send(body: ChatRequest):
     try:
         while True:
             try:
-                event = await asyncio.wait_for(bridge.queue.get(), timeout=120)
+                # Long timeout — agent tool use can run for hours
+                event = await asyncio.wait_for(bridge.queue.get(), timeout=3600)
             except TimeoutError:
                 break
 

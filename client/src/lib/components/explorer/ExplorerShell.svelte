@@ -1,7 +1,6 @@
 <script lang="ts">
   import { explorerStore } from "$lib/stores";
   import { parentDir } from "$lib/filesystem";
-  import NavBar from "./NavBar.svelte";
   import HomeView from "./HomeView.svelte";
   import FileGrid from "./FileGrid.svelte";
   import FileList from "./FileList.svelte";
@@ -14,13 +13,6 @@
       const tag = (e.target as HTMLElement)?.tagName;
       const isInput = tag === "INPUT" || tag === "TEXTAREA";
       const isEditor = (e.target as HTMLElement)?.closest(".cm-editor") !== null;
-
-      // Ctrl/Cmd+F to focus search
-      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
-        e.preventDefault();
-        window.dispatchEvent(new CustomEvent("explorer:focus-search"));
-        return;
-      }
 
       // Skip all custom shortcuts when in input or code editor
       if (isInput || isEditor) return;
@@ -140,7 +132,6 @@
 </script>
 
 <div class="flex h-full flex-col">
-  <NavBar />
   <div class="flex flex-1 overflow-hidden">
     {#if explorerStore.isDetailView && explorerStore.openFile}
       <div class="flex-1 overflow-hidden">

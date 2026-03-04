@@ -9,7 +9,6 @@ Uses the official Claude Agent SDK (pip install claude-agent-sdk) which provides
 - MCP server support for custom tools
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -197,6 +196,53 @@ class ClaudeSDKBackend:
                 return pattern
         return None
 
+    # Patterns that indicate an OS-level "open file" command.
+    import re as _re
+
+    _FILE_OPEN_PATTERNS = [
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*start\s+(?:\"\"?\s*)?(.+)",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*explorer(?:\.exe)?\s+(.+)",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*xdg-open\s+(.+)",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*open\s+(?!-a)(.+)",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*(?:powershell(?:\.exe)?\s+(?:-[Cc]ommand\s+)?)?"
+            r"Invoke-Item\s+(.+)",
+            _re.IGNORECASE,
+        ),
+        _re.compile(
+            r"(?:^|&&|\|\||;)\s*cmd\s+/[cC]\s+start\s+(?:\"\"?\s*)?(.+)",
+            _re.IGNORECASE,
+        ),
+    ]
+
+    def _is_file_open_command(self, command: str) -> str | None:
+        """Detect OS-level file-open commands and extract the file path.
+
+        Returns the file path if the command is an OS open, or None.
+        """
+        stripped = command.strip()
+        for pattern in self._FILE_OPEN_PATTERNS:
+            m = pattern.search(stripped)
+            if m:
+                path = m.group(1).strip().strip("'\"")
+                # Skip if it's opening a URL (http/https) — not a local file
+                if path.startswith(("http://", "https://")):
+                    return None
+                return path
+        return None
+
     async def _block_dangerous_hook(self, input_data, tool_use_id: str | None, context) -> dict:
         """PreToolUse hook to block dangerous commands.
 
@@ -235,6 +281,24 @@ class ClaudeSDKBackend:
                         "permissionDecision": "deny",
                         "permissionDecisionReason": (
                             f"PocketPaw security: '{matched}' pattern is blocked"
+                        ),
+                    }
+                }
+
+            # Redirect OS file-open commands to the in-app viewer.
+            # Matches: start, explorer, xdg-open, open (macOS), Invoke-Item
+            redirect = self._is_file_open_command(command)
+            if redirect:
+                logger.info("↩ Redirecting OS open command to open_in_explorer: %s", redirect)
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "Do not use OS commands to open files. "
+                            "Instead, use the PocketPaw in-app viewer:\n"
+                            "python -m pocketpaw.tools.cli open_in_explorer "
+                            f"'{{\"path\": \"{redirect}\", \"action\": \"view\"}}'"
                         ),
                     }
                 }
@@ -497,25 +561,48 @@ class ClaudeSDKBackend:
             self._client_in_use = False
             logger.info("Persistent client disconnected")
 
-    @staticmethod
-    async def _safe_iter(stream):
-        """Wrap an async iterator to skip SDK MessageParseError.
+    async def _resilient_receive(self, client):
+        """Iterate over client messages, recovering from parse errors.
 
-        The Claude CLI may emit event types (e.g. rate_limit_event) that
-        older versions of the SDK don't recognise, causing a hard crash.
-        This wrapper catches and logs those, letting the stream continue.
+        Uses ``receive_messages()`` directly (not ``receive_response()``)
+        and handles generator death from ``MessageParseError`` by
+        re-creating the iterator from the same underlying anyio channel.
+
+        When ``parse_message()`` raises inside the SDK's
+        ``receive_messages()`` generator, the exception kills the entire
+        generator chain.  The old ``_safe_iter`` wrapper caught the error
+        and called ``continue``, but the generator was already dead — so
+        the next ``__anext__()`` returned ``StopAsyncIteration`` and the
+        loop exited early, leaving unconsumed events in the channel that
+        leaked into the *next* turn.
+
+        This method instead re-creates the ``receive_messages()``
+        iterator after a parse error, which reads from the same
+        underlying anyio memory channel and picks up where it left off.
         """
-        it = stream.__aiter__()
-        while True:
+        _max_consecutive_errors = 50  # safety valve
+        _consecutive = 0
+        while _consecutive < _max_consecutive_errors:
             try:
-                yield await it.__anext__()
-            except StopAsyncIteration:
-                break
+                async for msg in client.receive_messages():
+                    _consecutive = 0  # reset on every successful message
+                    yield msg
+                    if self._ResultMessage and isinstance(msg, self._ResultMessage):
+                        return  # normal completion
+                # Generator ended naturally (end-of-stream) without ResultMessage
+                return
             except Exception as exc:
                 if "MessageParseError" in type(exc).__name__:
-                    logger.debug("Skipping unrecognised SDK event: %s", exc)
+                    _consecutive += 1
+                    logger.debug(
+                        "Skipping unrecognised SDK event (retry %d), "
+                        "re-creating iterator: %s",
+                        _consecutive,
+                        exc,
+                    )
                     continue
-                raise
+                raise  # re-raise non-parse errors
+        logger.error("Too many consecutive MessageParseErrors — aborting stream")
 
     async def run(
         self,
@@ -556,6 +643,17 @@ class ClaudeSDKBackend:
         import os
 
         self._stop_flag = False
+
+        # ── Prevent the SDK from closing stdin too early ──────────
+        # When hooks are present the SDK's stream_input() waits for
+        # the first ResultMessage before closing stdin.  The default
+        # timeout is 60 s which is far too short for long-running
+        # tool use (file search, code analysis, etc.).  Set to 24 h
+        # so the agent can work as long as it needs.
+        os.environ.setdefault(
+            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT",
+            str(24 * 60 * 60 * 1000),  # 24 hours in ms
+        )
 
         try:
             # Resolve LLM provider early — needed for routing + env.
@@ -764,16 +862,21 @@ class ClaudeSDKBackend:
                 self._client_in_use,
                 session_key,
             )
+            _persistent_client = None
             if not self._client_in_use:
                 try:
                     self._client_in_use = True
-                    client = await self._get_or_create_client(
+                    _persistent_client = await self._get_or_create_client(
                         options, session_key=session_key
                     )
                     logger.info("Persistent client: sending query (%d chars)", len(message))
-                    await client.query(message)
-                    event_stream = client.receive_response()
-                    logger.info("Persistent client: receive_response() returned iterator")
+                    await _persistent_client.query(message)
+                    # Use _resilient_receive instead of receive_response() +
+                    # _safe_iter.  This handles MessageParseError by
+                    # re-creating the iterator from the same anyio channel,
+                    # preventing stale events from leaking into the next turn.
+                    event_stream = self._resilient_receive(_persistent_client)
+                    logger.info("Persistent client: _resilient_receive() ready")
                 except Exception as client_err:
                     logger.warning(
                         "Persistent client failed, falling back to stateless query: %s",
@@ -789,6 +892,7 @@ class ClaudeSDKBackend:
                     self._client = None
                     self._client_options_key = None
                     self._client_in_use = False
+                    _persistent_client = None
 
             if event_stream is None:
                 logger.info("Starting stateless query (fallback — _client_in_use was True)")
@@ -798,10 +902,11 @@ class ClaudeSDKBackend:
             _streamed_via_events = False
             _announced_tools: set[str] = set()
             _event_count = 0
+            _saw_result = False  # Track if ResultMessage was consumed
 
             # Stream responses — release the persistent client guard when done
             try:
-                async for event in self._safe_iter(event_stream):
+                async for event in event_stream:
                     _event_count += 1
                     if _event_count <= 3:
                         logger.info(
@@ -905,12 +1010,21 @@ class ClaudeSDKBackend:
 
                     # ========== ResultMessage - final result ==========
                     if self._ResultMessage and isinstance(event, self._ResultMessage):
+                        _saw_result = True
                         is_error = getattr(event, "is_error", False)
                         result = getattr(event, "result", "")
 
                         if is_error:
-                            logger.error(f"ResultMessage error: {result}")
-                            yield AgentEvent(type="error", content=str(result))
+                            # Temporarily suppress API-key errors
+                            _result_str = str(result)
+                            if "api key" in _result_str.lower():
+                                logger.warning(
+                                    "Suppressed API-key error from SDK: %s",
+                                    _result_str[:200],
+                                )
+                            else:
+                                logger.error(f"ResultMessage error: {result}")
+                                yield AgentEvent(type="error", content=_result_str)
                         else:
                             logger.debug(f"ResultMessage: {str(result)[:100]}...")
                         continue
@@ -919,24 +1033,26 @@ class ClaudeSDKBackend:
                     event_class = event.__class__.__name__
                     logger.debug(f"Unknown event type: {event_class}")
             finally:
-                # ── Drain trailing ResultMessage from the persistent
-                # client's pipe.  The SDK iterator stops after the
-                # AssistantMessage (end-of-turn) but the subprocess
-                # writes a ResultMessage summary afterwards.  If we
-                # don't consume it now, the NEXT receive_response()
-                # reads it as stale data and returns immediately. ──
-                if self._client is not None:
+                # ── Drain remaining events if the main loop exited
+                # before consuming the ResultMessage.  For the persistent
+                # client, _resilient_receive handles this.  For the
+                # stateless path or early-break scenarios (stop flag),
+                # we still need to ensure the pipe is clean. ──
+                if (
+                    _persistent_client is not None
+                    and not _saw_result
+                    and self._client is not None
+                ):
+                    logger.warning(
+                        "Main loop exited without ResultMessage — "
+                        "destroying persistent client to avoid stale data"
+                    )
                     try:
-                        drain = self._client.receive_response()
-                        trailing = await asyncio.wait_for(
-                            drain.__aiter__().__anext__(), timeout=2.0
-                        )
-                        logger.info(
-                            "Drained trailing %s from persistent client",
-                            type(trailing).__name__,
-                        )
-                    except (StopAsyncIteration, TimeoutError, Exception):
+                        await self._client.disconnect()
+                    except Exception:
                         pass
+                    self._client = None
+                    self._client_options_key = None
 
                 self._client_in_use = False
                 logger.info(
