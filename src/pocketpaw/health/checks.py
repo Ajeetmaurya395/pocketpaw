@@ -870,7 +870,7 @@ def check_gws_binary() -> HealthCheckResult:
         category="integrations",
         status="warning",
         message="gws not found — Google Workspace MCP preset won't work without it",
-        fix_hint="Install: npm i -g @anthropic-ai/gws  (or cargo install gws)",
+        fix_hint="Install: npm i -g @googleworkspace/cli",
     )
 
 
@@ -891,6 +891,10 @@ STARTUP_CHECKS = [
     check_audit_log_writable,
     check_memory_dir_accessible,
     check_version_update,
+]
+
+# Optional integration checks (only useful when specific presets are enabled)
+INTEGRATION_CHECKS = [
     check_gws_binary,
 ]
 
