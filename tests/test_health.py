@@ -14,6 +14,7 @@ import pytest
 
 from pocketpaw.health.checks import (
     CONNECTIVITY_CHECKS,
+    INTEGRATION_CHECKS,
     STARTUP_CHECKS,
     HealthCheckResult,
     check_api_key_format,
@@ -24,6 +25,7 @@ from pocketpaw.health.checks import (
     check_config_permissions,
     check_config_valid_json,
     check_disk_space,
+    check_gws_binary,
     check_llm_reachable,
     check_memory_dir_accessible,
     check_secrets_encrypted,
@@ -608,12 +610,37 @@ class TestCheckVersionUpdate:
         assert "unavailable" in result.message
 
 
+class TestCheckGwsBinary:
+    @patch("shutil.which", return_value="/usr/bin/gws")
+    def test_gws_found(self, mock_which):
+        result = check_gws_binary()
+        assert result.status == "ok"
+        assert result.check_id == "gws_binary"
+        assert "found" in result.message
+
+    @patch("shutil.which", return_value=None)
+    def test_gws_not_found(self, mock_which):
+        result = check_gws_binary()
+        assert result.status == "warning"
+        assert result.check_id == "gws_binary"
+        assert "@googleworkspace/cli" in result.fix_hint
+
+
 class TestCheckRegistries:
     def test_startup_checks_count(self):
         assert len(STARTUP_CHECKS) == 11  # 10 original + version_update
 
     def test_connectivity_checks_count(self):
         assert len(CONNECTIVITY_CHECKS) == 1
+
+    def test_integration_checks_count(self):
+        assert len(INTEGRATION_CHECKS) == 1
+
+    def test_gws_not_in_startup_checks(self):
+        assert check_gws_binary not in STARTUP_CHECKS
+
+    def test_gws_in_integration_checks(self):
+        assert check_gws_binary in INTEGRATION_CHECKS
 
     def test_all_startup_checks_are_callable(self):
         for check in STARTUP_CHECKS:
