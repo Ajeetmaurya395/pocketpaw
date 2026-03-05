@@ -3,6 +3,7 @@
 # Updated: 2026-02-18 — added check_version_update (PyPI version check via update_check module).
 # Updated: 2026-02-17 — fix check_secrets_encrypted: was doing json.loads() on
 #   Fernet-encrypted bytes (always fails). Now checks for Fernet token signature.
+# Updated: 2026-03-05 — added check_gws_binary for Google Workspace CLI integration.
 # Each check returns a HealthCheckResult dataclass.
 
 from __future__ import annotations
@@ -846,6 +847,34 @@ def check_version_update() -> HealthCheckResult:
 
 
 # =============================================================================
+# Optional integration checks
+# =============================================================================
+
+
+def check_gws_binary() -> HealthCheckResult:
+    """Check whether the Google Workspace CLI (gws) is installed."""
+    import shutil
+
+    if shutil.which("gws"):
+        return HealthCheckResult(
+            check_id="gws_binary",
+            name="Google Workspace CLI",
+            category="integrations",
+            status="ok",
+            message="gws binary found in PATH",
+            fix_hint="",
+        )
+    return HealthCheckResult(
+        check_id="gws_binary",
+        name="Google Workspace CLI",
+        category="integrations",
+        status="warning",
+        message="gws not found — Google Workspace MCP preset won't work without it",
+        fix_hint="Install: npm i -g @anthropic-ai/gws  (or cargo install gws)",
+    )
+
+
+# =============================================================================
 # Check registry
 # =============================================================================
 
@@ -862,6 +891,7 @@ STARTUP_CHECKS = [
     check_audit_log_writable,
     check_memory_dir_accessible,
     check_version_update,
+    check_gws_binary,
 ]
 
 # Async checks (run in background, may be slow)
