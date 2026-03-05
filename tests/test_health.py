@@ -319,7 +319,7 @@ class TestCheckApiKeyPrimary:
             patch.dict("os.environ", {}, clear=True),
         ):
             r = check_api_key_primary()
-            assert r.status == "critical"
+            assert r.status == "warning"
 
     def test_claude_sdk_env_var(self):
         settings = self._mock_settings(anthropic_api_key="")
@@ -359,7 +359,7 @@ class TestCheckApiKeyPrimary:
             patch.dict("os.environ", {}, clear=True),
         ):
             r = check_api_key_primary()
-            assert r.status == "critical"
+            assert r.status == "warning"
 
     def test_openai_agents_with_key(self):
         settings = self._mock_settings(agent_backend="openai_agents", openai_api_key="sk-test")
@@ -545,7 +545,7 @@ class TestCheckLlmReachable:
             patch.dict("os.environ", {}, clear=True),
         ):
             r = await check_llm_reachable()
-            assert r.status == "critical"
+            assert r.status == "warning"
             assert "No API key" in r.message
 
     @pytest.mark.asyncio
@@ -610,7 +610,7 @@ class TestCheckVersionUpdate:
 
 class TestCheckRegistries:
     def test_startup_checks_count(self):
-        assert len(STARTUP_CHECKS) == 11  # 10 original + version_update
+        assert len(STARTUP_CHECKS) == 12  # 10 original + version_update + gws_binary
 
     def test_connectivity_checks_count(self):
         assert len(CONNECTIVITY_CHECKS) == 1
@@ -655,10 +655,37 @@ class TestHealthEngine:
             patch("importlib.util.find_spec", return_value=MagicMock()),
         ):
             results = engine.run_startup_checks()
-            assert len(results) == 11  # 10 original + version_update
+            assert len(results) == 12  # 10 original + version_update + gws_binary
             # All should be ok with valid config + key
             statuses = {r.status for r in results}
             assert "critical" not in statuses
+
+    def test_missing_api_key_degraded_with_onboarding_message(self, engine, tmp_path):
+        """When API key is missing, health is DEGRADED and summary contains onboarding guidance."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text('{"agent_backend": "claude_agent_sdk"}')
+        config_path.chmod(0o600)
+
+        settings = MagicMock()
+        settings.agent_backend = "claude_agent_sdk"
+        settings.anthropic_api_key = ""
+        settings.openai_api_key = ""
+        settings.google_api_key = ""
+        settings.llm_provider = "auto"
+
+        with (
+            patch(_P_CONFIG_PATH, return_value=config_path),
+            patch(_P_CONFIG_DIR, return_value=tmp_path),
+            patch(_P_SETTINGS, return_value=settings),
+            patch("importlib.util.find_spec", return_value=MagicMock()),
+        ):
+            engine.run_startup_checks()
+
+        assert engine.overall_status == "degraded"
+        s = engine.summary
+        assert s["status"] == "degraded"
+        assert s["message"] is not None
+        assert "add API key" in s["message"].lower() or "api key" in s["message"].lower()
 
     def test_overall_status_unhealthy(self, engine):
         engine._results = [
@@ -701,6 +728,26 @@ class TestHealthEngine:
         s = engine.summary
         assert s["status"] == "healthy"
         assert s["issues"] == []
+
+    def test_summary_degraded_api_key_message(self, engine):
+        """When degraded due to api_key_primary, summary includes onboarding message."""
+        engine._results = [
+            HealthCheckResult("config_exists", "Config", "config", "ok", "ok", ""),
+            HealthCheckResult(
+                "api_key_primary",
+                "Primary API Key",
+                "config",
+                "warning",
+                "No Anthropic API key found",
+                "Add key in Settings",
+            ),
+        ]
+        engine._last_check = "2026-01-01T00:00:00"
+        s = engine.summary
+        assert s["status"] == "degraded"
+        assert s["message"] == "System running, but AI features disabled. Please add API key."
+        assert len(s["issues"]) == 1
+        assert s["issues"][0]["check_id"] == "api_key_primary"
 
     def test_health_prompt_section_healthy(self, engine):
         engine._results = [
