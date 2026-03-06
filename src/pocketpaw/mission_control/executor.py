@@ -218,8 +218,15 @@ class MCTaskExecutor:
                     final_status = "stopped"
                     break
 
-                chunk_type = chunk.get("type", "")
-                content = chunk.get("content", "")
+                # AgentEvent objects use attributes; support dict fallback for tests
+                if isinstance(chunk, dict):
+                    chunk_type = chunk.get("type", "")
+                    content = chunk.get("content", "")
+                    meta = chunk.get("metadata") or {}
+                else:
+                    chunk_type = chunk.type
+                    content = chunk.content or ""
+                    meta = chunk.metadata or {}
 
                 if chunk_type == "message" and content:
                     output_chunks.append(content)
@@ -235,7 +242,7 @@ class MCTaskExecutor:
                     )
 
                 elif chunk_type == "tool_use":
-                    tool_name = chunk.get("metadata", {}).get("name", "unknown")
+                    tool_name = meta.get("name", "unknown")
                     await self._broadcast_event(
                         "mc_task_output",
                         {
