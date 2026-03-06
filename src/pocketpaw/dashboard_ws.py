@@ -427,6 +427,13 @@ async def websocket_handler(
                         settings.mem0_vector_store = data["mem0_vector_store"]
                     if data.get("mem0_ollama_base_url"):
                         settings.mem0_ollama_base_url = data["mem0_ollama_base_url"]
+                    # Web server host/port
+                    if "web_host" in data:
+                        settings.web_host = data["web_host"]
+                    if "web_port" in data:
+                        val = data["web_port"]
+                        if isinstance(val, int | float) and 1 <= val <= 65535:
+                            settings.web_port = int(val)
                     warnings = validate_api_keys(settings)
                     settings.save()
 
@@ -641,6 +648,8 @@ async def websocket_handler(
                             "hasSpotifyClientId": bool(settings.spotify_client_id),
                             "hasSpotifyClientSecret": bool(settings.spotify_client_secret),
                             "hasSarvamKey": bool(settings.sarvam_api_key),
+                            "webHost": settings.web_host,
+                            "webPort": settings.web_port,
                             "agentActive": agent_active,
                             "agentStatus": agent_status,
                         },

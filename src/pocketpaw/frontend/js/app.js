@@ -598,11 +598,20 @@ function app() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ confirm: true }),
                 });
-                this.showToast(
-                    'Server is restarting. If you changed the host or port, ' +
-                    'reconnect at the new address.',
-                    'info'
-                );
+                const newHost = this.settings.webHost || '127.0.0.1';
+                const newPort = this.settings.webPort || 8888;
+                const displayHost = (newHost === '0.0.0.0') ? window.location.hostname : newHost;
+                const newUrl = `${window.location.protocol}//${displayHost}:${newPort}`;
+                const currentUrl = `${window.location.protocol}//${window.location.host}`;
+                if (newUrl !== currentUrl) {
+                    this.showToast(
+                        `Server is restarting. Redirecting to ${newUrl} ...`,
+                        'info'
+                    );
+                    setTimeout(() => { window.location.href = newUrl; }, 3000);
+                } else {
+                    this.showToast('Server is restarting...', 'info');
+                }
             } catch {
                 this.showToast('Restart request sent. Reconnecting…', 'info');
             } finally {
