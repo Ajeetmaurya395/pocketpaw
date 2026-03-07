@@ -5,8 +5,9 @@ botbuilder-core is mocked since it's an optional dependency.
 
 import sys
 from types import SimpleNamespace
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 # Mock botbuilder before importing the adapter
 mock_bb_core = MagicMock()
@@ -244,7 +245,8 @@ class TestTeamsAdapterErrorRecovery:
         )
 
         turn_ctx = SimpleNamespace(activity=activity)
-        # Exception propagates from _process_activity; the webhook handler catches it at the outer level
+        # Exception propagates from _process_activity;
+        # the webhook handler catches it at the outer level
         with pytest.raises(RuntimeError, match="Bus error"):
             await adapter._process_activity(turn_ctx)
 

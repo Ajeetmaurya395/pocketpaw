@@ -1,7 +1,8 @@
 """Tests for Signal Channel Adapter — Sprint 20."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from pocketpaw.bus.adapters.signal_adapter import SignalAdapter
 from pocketpaw.bus.events import Channel, OutboundMessage
@@ -224,9 +225,7 @@ class TestSignalAdapterErrorRecovery:
         """HTTP 401/403 auth errors are logged but don't raise."""
         adapter = SignalAdapter(phone_number="+1234567890")
         adapter._http = AsyncMock()
-        adapter._http.post = AsyncMock(
-            return_value=MagicMock(status_code=401, text="Unauthorized")
-        )
+        adapter._http.post = AsyncMock(return_value=MagicMock(status_code=401, text="Unauthorized"))
 
         msg = OutboundMessage(
             channel=Channel.SIGNAL,
@@ -240,9 +239,7 @@ class TestSignalAdapterErrorRecovery:
         """HTTP 429 rate limit errors are logged but don't raise."""
         adapter = SignalAdapter(phone_number="+1234567890")
         adapter._http = AsyncMock()
-        adapter._http.post = AsyncMock(
-            return_value=MagicMock(status_code=429, text="Rate limited")
-        )
+        adapter._http.post = AsyncMock(return_value=MagicMock(status_code=429, text="Rate limited"))
 
         msg = OutboundMessage(
             channel=Channel.SIGNAL,
@@ -403,8 +400,10 @@ class TestSignalAdapterLifecycle:
         bus.unsubscribe_outbound = MagicMock()
 
         mock_http_client = AsyncMock(spec=httpx.AsyncClient)
-        with patch("httpx.AsyncClient", return_value=mock_http_client), \
-             patch.object(adapter, "_poll_loop", new_callable=AsyncMock):
+        with (
+            patch("httpx.AsyncClient", return_value=mock_http_client),
+            patch.object(adapter, "_poll_loop", new_callable=AsyncMock),
+        ):
             await adapter.start(bus)
 
             await adapter.stop()
