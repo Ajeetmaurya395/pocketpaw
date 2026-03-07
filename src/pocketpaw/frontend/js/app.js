@@ -598,11 +598,17 @@ function app() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ confirm: true }),
                 });
-                const newHost = this.settings.webHost || '127.0.0.1';
-                const newPort = this.settings.webPort || 8888;
-                const displayHost = (newHost === '0.0.0.0') ? window.location.hostname : newHost;
+                // Use the current browser location as the baseline. The configured
+                // webPort may differ from the actual running port when the server
+                // auto-found a free port at startup, so only redirect if the user
+                // explicitly changed host/port in settings.
+                const curHost = window.location.hostname;
+                const curPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+                const newHost = this.settings.webHost || curHost;
+                const newPort = this.settings.webPort || curPort;
+                const displayHost = (newHost === '0.0.0.0') ? curHost : newHost;
                 const newUrl = `${window.location.protocol}//${displayHost}:${newPort}`;
-                const currentUrl = `${window.location.protocol}//${window.location.host}`;
+                const currentUrl = `${window.location.protocol}//${curHost}:${curPort}`;
                 if (newUrl !== currentUrl) {
                     this.showToast(
                         `Server is restarting. Redirecting to ${newUrl} ...`,
@@ -611,6 +617,7 @@ function app() {
                     setTimeout(() => { window.location.href = newUrl; }, 3000);
                 } else {
                     this.showToast('Server is restarting...', 'info');
+                    setTimeout(() => { window.location.reload(); }, 3000);
                 }
             } catch {
                 this.showToast('Restart request sent. Reconnecting…', 'info');
