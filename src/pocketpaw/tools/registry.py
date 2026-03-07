@@ -9,11 +9,11 @@ import asyncio
 import logging
 from typing import Any
 
-DEFAULT_TOOL_TIMEOUT = 60  # seconds
-
 from pocketpaw.security import AuditSeverity, get_audit_logger
 from pocketpaw.tools.policy import ToolPolicy
 from pocketpaw.tools.protocol import ToolProtocol
+
+DEFAULT_TOOL_TIMEOUT = 60  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class ToolRegistry:
             log_result = result[:200] + "..." if len(result) > 200 else result
             logger.debug(f"🔧 {name} result: {log_result}")
             return result
-        except asyncio.TimeoutError:
+        except TimeoutError:
             audit.log_tool_use(name, params, severity=severity, status="timeout")
             logger.error(f"🔧 {name} timed out after {timeout}s")
             return f"Error: Tool '{name}' timed out after {timeout}s"
