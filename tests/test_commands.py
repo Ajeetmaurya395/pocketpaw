@@ -714,6 +714,49 @@ class TestIsCommandNewCommands:
     def test_recognises_delete(self):
         assert self.handler.is_command("/delete")
 
+    def test_recognises_kill(self):
+        assert self.handler.is_command("/kill")
+
+
+class TestKillCommand:
+    def setup_method(self):
+        from pocketpaw.bus.commands import CommandHandler
+
+        self.handler = CommandHandler()
+
+    async def test_kill_no_agent_loop(self):
+        self.handler.set_agent_loop(None)
+
+        msg = _make_msg("/kill")
+        response = await self.handler.handle(msg)
+
+        assert response is not None
+        assert response.content == "No active agent run for this session."
+
+    async def test_kill_cancels_session_when_task_running(self):
+        mock_loop = MagicMock()
+        mock_loop.cancel_session = AsyncMock(return_value=True)
+        self.handler.set_agent_loop(mock_loop)
+
+        msg = _make_msg("/kill")
+        response = await self.handler.handle(msg)
+
+        assert response is not None
+        assert response.content == "Agent run cancelled for this session."
+        mock_loop.cancel_session.assert_called_once_with("discord:12345")
+
+    async def test_kill_no_task_for_session(self):
+        mock_loop = MagicMock()
+        mock_loop.cancel_session = AsyncMock(return_value=False)
+        self.handler.set_agent_loop(mock_loop)
+
+        msg = _make_msg("/kill")
+        response = await self.handler.handle(msg)
+
+        assert response is not None
+        assert response.content == "No active agent run for this session."
+        mock_loop.cancel_session.assert_called_once_with("discord:12345")
+
 
 # =========================================================================
 # ! prefix fallback
@@ -1493,8 +1536,8 @@ class TestBackendsCommand:
         mock_settings.return_value = settings
 
         mock_list.return_value = ["claude_agent_sdk", "missing_backend"]
-        mock_info.side_effect = (
-            lambda n: None
+        mock_info.side_effect = lambda n: (
+            None
             if n == "missing_backend"
             else MagicMock(
                 display_name="Claude", capabilities=MagicMock(__iter__=lambda s: iter([]))

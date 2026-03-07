@@ -31,7 +31,7 @@ Design notes:
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 # ============================================================================
@@ -39,7 +39,7 @@ from typing import Any
 # ============================================================================
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     """Agent operational status."""
 
     IDLE = "idle"  # Not actively working
@@ -48,7 +48,7 @@ class AgentStatus(str, Enum):
     OFFLINE = "offline"  # Not responding to heartbeats
 
 
-class AgentLevel(str, Enum):
+class AgentLevel(StrEnum):
     """Agent autonomy level."""
 
     INTERN = "intern"  # Needs approval for most actions
@@ -56,7 +56,7 @@ class AgentLevel(str, Enum):
     LEAD = "lead"  # Full autonomy, can delegate
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """Task lifecycle status."""
 
     INBOX = "inbox"  # New, unassigned
@@ -68,7 +68,7 @@ class TaskStatus(str, Enum):
     SKIPPED = "skipped"  # Manually skipped by user
 
 
-class TaskPriority(str, Enum):
+class TaskPriority(StrEnum):
     """Task priority level."""
 
     LOW = "low"
@@ -77,7 +77,7 @@ class TaskPriority(str, Enum):
     URGENT = "urgent"
 
 
-class ActivityType(str, Enum):
+class ActivityType(StrEnum):
     """Types of activities for the feed."""
 
     TASK_CREATED = "task_created"
@@ -92,7 +92,7 @@ class ActivityType(str, Enum):
     MENTION = "mention"
 
 
-class DocumentType(str, Enum):
+class DocumentType(StrEnum):
     """Types of shared documents."""
 
     DELIVERABLE = "deliverable"  # Final output

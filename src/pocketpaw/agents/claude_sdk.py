@@ -298,7 +298,7 @@ class ClaudeSDKBackend:
                             "Do not use OS commands to open files. "
                             "Instead, use the PocketPaw in-app viewer:\n"
                             "python -m pocketpaw.tools.cli open_in_explorer "
-                            f"'{{\"path\": \"{redirect}\", \"action\": \"view\"}}'"
+                            f'\'{{"path": "{redirect}", "action": "view"}}\''
                         ),
                     }
                 }
@@ -512,9 +512,7 @@ class ClaudeSDKBackend:
             logger.error("Fast-path API error: %s", e)
             yield AgentEvent(type="error", content=llm.format_api_error(e))
 
-    async def _get_or_create_client(
-        self, options: Any, *, session_key: str | None = None
-    ) -> Any:
+    async def _get_or_create_client(self, options: Any, *, session_key: str | None = None) -> Any:
         """Get or create a persistent ClaudeSDKClient.
 
         Reuses the existing subprocess if model, tools, **and session** haven't
@@ -595,8 +593,7 @@ class ClaudeSDKBackend:
                 if "MessageParseError" in type(exc).__name__:
                     _consecutive += 1
                     logger.debug(
-                        "Skipping unrecognised SDK event (retry %d), "
-                        "re-creating iterator: %s",
+                        "Skipping unrecognised SDK event (retry %d), re-creating iterator: %s",
                         _consecutive,
                         exc,
                     )
@@ -1038,11 +1035,7 @@ class ClaudeSDKBackend:
                 # client, _resilient_receive handles this.  For the
                 # stateless path or early-break scenarios (stop flag),
                 # we still need to ensure the pipe is clean. ──
-                if (
-                    _persistent_client is not None
-                    and not _saw_result
-                    and self._client is not None
-                ):
+                if _persistent_client is not None and not _saw_result and self._client is not None:
                     logger.warning(
                         "Main loop exited without ResultMessage — "
                         "destroying persistent client to avoid stale data"
@@ -1068,9 +1061,7 @@ class ClaudeSDKBackend:
 
             # Log any stderr captured from the CLI subprocess
             if _stderr_lines:
-                logger.error(
-                    "CLI stderr output:\n%s", "\n".join(_stderr_lines)
-                )
+                logger.error("CLI stderr output:\n%s", "\n".join(_stderr_lines))
 
             # Clear client on unexpected errors
             self._client = None

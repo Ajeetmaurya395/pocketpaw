@@ -50,12 +50,12 @@ UUID_PATTERN = re.compile(
 MAX_CONCURRENT_TASKS = 5  # Prevent resource exhaustion
 MAX_ERROR_MESSAGE_LENGTH = 200  # Truncate error messages
 
-from pocketpaw.agents.router import AgentRouter
-from pocketpaw.bus.events import SystemEvent
-from pocketpaw.bus.queue import get_message_bus
-from pocketpaw.config import Settings, get_settings
-from pocketpaw.mission_control.manager import get_mission_control_manager
-from pocketpaw.mission_control.models import (
+from pocketpaw.agents.router import AgentRouter  # noqa: E402
+from pocketpaw.bus.events import SystemEvent  # noqa: E402
+from pocketpaw.bus.queue import get_message_bus  # noqa: E402
+from pocketpaw.config import Settings, get_settings  # noqa: E402
+from pocketpaw.mission_control.manager import get_mission_control_manager  # noqa: E402
+from pocketpaw.mission_control.models import (  # noqa: E402
     Activity,
     ActivityType,
     AgentStatus,
@@ -223,23 +223,15 @@ class MCTaskExecutor:
                 timeout_seconds = task.timeout_minutes * 60
                 try:
                     await asyncio.wait_for(
-                        self._stream_task(
-                            router, prompt, task_id, output_chunks
-                        ),
+                        self._stream_task(router, prompt, task_id, output_chunks),
                         timeout=timeout_seconds,
                     )
                 except TimeoutError:
-                    error_message = (
-                        f"Task timed out after {task.timeout_minutes} minutes"
-                    )
+                    error_message = f"Task timed out after {task.timeout_minutes} minutes"
                     final_status = "timeout"
-                    logger.warning(
-                        f"Task {task_id} timed out after {task.timeout_minutes}m"
-                    )
+                    logger.warning(f"Task {task_id} timed out after {task.timeout_minutes}m")
             else:
-                await self._stream_task(
-                    router, prompt, task_id, output_chunks
-                )
+                await self._stream_task(router, prompt, task_id, output_chunks)
 
             # Check if streaming set an error
             if task_id in self._stop_flags and self._stop_flags[task_id]:
@@ -361,9 +353,7 @@ class MCTaskExecutor:
                     },
                 )
                 # Re-dispatch for retry
-                asyncio.create_task(
-                    self.execute_task_background(task_id, agent_id)
-                )
+                asyncio.create_task(self.execute_task_background(task_id, agent_id))
 
             elif final_status in ("error", "timeout"):
                 await self._log_activity(
@@ -371,8 +361,7 @@ class MCTaskExecutor:
                     agent_id=agent_id,
                     task_id=task_id,
                     message=(
-                        f"{agent.name} failed on '{task.title}' "
-                        f"(no retries left): {error_message}"
+                        f"{agent.name} failed on '{task.title}' (no retries left): {error_message}"
                     ),
                 )
             elif final_status == "stopped":
@@ -390,9 +379,7 @@ class MCTaskExecutor:
                 try:
                     await self._on_task_done_callback(task_id)
                 except Exception as e:
-                    logger.warning(
-                        f"Scheduler callback failed for task {task_id}: {e}"
-                    )
+                    logger.warning(f"Scheduler callback failed for task {task_id}: {e}")
 
         return {
             "status": final_status,

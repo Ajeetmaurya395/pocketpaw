@@ -306,12 +306,14 @@ class DeepWorkSession:
                 if existing:
                     project.team_agent_ids.append(existing.id)
                 else:
+                    from pocketpaw.config import get_settings
+
                     agent = await self.manager.create_agent(
                         name=agent_spec.name,
                         role=agent_spec.role,
                         description=agent_spec.description,
                         specialties=agent_spec.specialties,
-                        backend=agent_spec.backend,
+                        backend=agent_spec.backend or get_settings().agent_backend,
                     )
                     project.team_agent_ids.append(agent.id)
 
@@ -463,9 +465,7 @@ class DeepWorkSession:
         if not project:
             raise ValueError(f"Project not found: {project_id}")
         if project.status in (ProjectStatus.COMPLETED, ProjectStatus.CANCELLED):
-            raise ValueError(
-                f"Cannot cancel project with status '{project.status.value}'"
-            )
+            raise ValueError(f"Cannot cancel project with status '{project.status.value}'")
 
         # Stop all running tasks
         await self.executor.stop_all_project_tasks(project_id)

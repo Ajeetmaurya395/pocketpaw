@@ -9,6 +9,7 @@ Extracted from dashboard.py — contains:
 
 import asyncio
 import logging
+from datetime import UTC
 
 import pocketpaw.dashboard_state as _state
 from pocketpaw.bus import get_message_bus
@@ -201,9 +202,7 @@ async def startup_event(
         installed = await kit_store.list_kits()
         builtin_ids = {k.id for k in installed if k.config.meta.built_in}
         if "project-orchestrator" not in builtin_ids:
-            yaml_path = (
-                Path(__file__).parent / "kits" / "builtins" / "project_orchestrator.yaml"
-            )
+            yaml_path = Path(__file__).parent / "kits" / "builtins" / "project_orchestrator.yaml"
             yaml_str = yaml_path.read_text(encoding="utf-8")
             kit = await kit_store.install_kit(yaml_str, kit_id="project-orchestrator")
             await kit_store.activate_kit(kit.id)
@@ -283,14 +282,15 @@ async def startup_event(
                 logger.warning("Health heartbeat error: %s", e)
 
         # Reuse the daemon's APScheduler
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         daemon.trigger_engine.scheduler.add_job(
             _health_heartbeat,
             "interval",
             minutes=5,
             id="health_heartbeat",
             replace_existing=True,
-            next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10),
+            next_run_time=datetime.now(UTC) + timedelta(seconds=10),
         )
         logger.info("Health heartbeat registered (every 5 min)")
     except Exception as e:
@@ -354,4 +354,3 @@ async def shutdown_event(*, _stop_channel_adapter_fn=None):
         await mcp.stop_all()
     except Exception as e:
         logger.warning("Error stopping MCP servers: %s", e)
-
