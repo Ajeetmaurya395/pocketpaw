@@ -227,9 +227,7 @@ class TestGoogleChatAdapterErrorRecovery:
         """Exceptions during send are caught and don't propagate."""
         adapter = GoogleChatAdapter()
         mock_service = MagicMock()
-        mock_service.spaces().messages().create().execute.side_effect = Exception(
-            "API error"
-        )
+        mock_service.spaces().messages().create().execute.side_effect = Exception("API error")
         adapter._chat_service = mock_service
 
         msg = OutboundMessage(
