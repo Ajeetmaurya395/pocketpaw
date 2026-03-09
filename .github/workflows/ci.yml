@@ -30,9 +30,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Ruff format check
-        run: |
-          uv run ruff format --diff . || true
-          uv run ruff format --check .
+        run: uv run ruff format --check .
 
   test:
     name: Test (Python ${{ matrix.python-version }})
