@@ -1,17 +1,56 @@
 // Tauri IPC commands for the PocketPaw desktop client.
-// Updated: 2026-03-09 — Improve install detection: also check `uv run pocketpaw`
-//   as fallback when CLI not directly in PATH. Strip ANSI escape codes from
-//   installer output before emitting to frontend. Previous fixes: #[cfg(windows)]
-//   for cross-platform build, unused `_profile` param.
+// Updated: 2026-03-09 — Fix PATH detection for macOS GUI apps: augment PATH
+//   with common bin dirs (~/.local/bin, /opt/homebrew/bin, etc.) since Tauri
+//   apps don't inherit shell PATH. Smarter install detection: check config dir,
+//   direct binary paths, pip show. Strip ANSI from installer output.
+use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
+
+/// Augment the current PATH with common binary locations that macOS GUI apps miss.
+/// Tauri apps launched from Finder/Dock don't source .zshrc/.bashrc, so they get
+/// a minimal PATH like /usr/bin:/bin:/usr/sbin:/sbin. This adds the dirs where
+/// pip, uv, homebrew, and cargo typically install binaries.
+fn _augmented_path() -> String {
+    let current = env::var("PATH").unwrap_or_default();
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+    let home_str = home.to_string_lossy();
+
+    let extra_dirs = [
+        format!("{}/.local/bin", home_str),          // pip install --user
+        format!("{}/.cargo/bin", home_str),           // cargo, uv
+        "/opt/homebrew/bin".to_string(),              // Homebrew on Apple Silicon
+        "/opt/homebrew/sbin".to_string(),
+        "/usr/local/bin".to_string(),                 // Homebrew on Intel, manual installs
+        "/usr/local/sbin".to_string(),
+        format!("{}/Library/Python/3.11/bin", home_str), // macOS framework Python
+        format!("{}/Library/Python/3.12/bin", home_str),
+        format!("{}/Library/Python/3.13/bin", home_str),
+    ];
+
+    let mut parts: Vec<&str> = current.split(':').collect();
+    for dir in &extra_dirs {
+        if !parts.contains(&dir.as_str()) {
+            parts.push(dir);
+        }
+    }
+    parts.join(":")
+}
+
+/// Create a Command with the augmented PATH set.
+fn _cmd(program: &str) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.env("PATH", _augmented_path());
+    cmd
+}
 
 /// Read the access token from ~/.pocketpaw/access_token
 #[tauri::command]
@@ -53,28 +92,32 @@ pub struct InstallStatus {
     pub config_dir: String,
 }
 
-/// Check if PocketPaw is installed (config dir + CLI in PATH or via uv)
+/// Check if PocketPaw is installed.
+/// Uses augmented PATH to find binaries that macOS GUI apps would miss.
+/// Checks: direct binary in PATH → binary at known paths → uv run → pip show
 #[tauri::command]
 pub fn check_pocketpaw_installed() -> Result<InstallStatus, String> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
     let config_dir = home.join(".pocketpaw");
     let has_config_dir = config_dir.is_dir();
 
-    // Check direct CLI first, then fall back to `uv run pocketpaw --version`
-    let has_cli = _check_cli_direct() || _check_cli_via_uv();
+    let has_cli = _check_cli_direct()
+        || _check_binary_at_known_paths()
+        || _check_cli_via_uv()
+        || _check_via_pip();
 
     Ok(InstallStatus {
-        installed: has_config_dir && has_cli,
+        installed: has_config_dir || has_cli,
         has_config_dir,
         has_cli,
         config_dir: config_dir.to_string_lossy().to_string(),
     })
 }
 
-/// Check if `pocketpaw` is directly in PATH
+/// Check if `pocketpaw` is in the (augmented) PATH
 fn _check_cli_direct() -> bool {
     if cfg!(windows) {
-        Command::new("where")
+        _cmd("where")
             .arg("pocketpaw")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -82,7 +125,7 @@ fn _check_cli_direct() -> bool {
             .map(|s| s.success())
             .unwrap_or(false)
     } else {
-        Command::new("which")
+        _cmd("which")
             .arg("pocketpaw")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -92,15 +135,51 @@ fn _check_cli_direct() -> bool {
     }
 }
 
+/// Check common binary installation paths directly (no PATH needed)
+fn _check_binary_at_known_paths() -> bool {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return false,
+    };
+
+    let candidates = [
+        home.join(".local/bin/pocketpaw"),
+        home.join(".cargo/bin/pocketpaw"),
+        PathBuf::from("/opt/homebrew/bin/pocketpaw"),
+        PathBuf::from("/usr/local/bin/pocketpaw"),
+    ];
+
+    candidates.iter().any(|p| p.exists())
+}
+
 /// Check if `pocketpaw` is available via `uv run`
 fn _check_cli_via_uv() -> bool {
-    Command::new("uv")
+    _cmd("uv")
         .args(["run", "pocketpaw", "--version"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Check if pocketpaw is installed as a pip package
+fn _check_via_pip() -> bool {
+    // Try pip show (fast, doesn't import anything)
+    _cmd("pip")
+        .args(["show", "pocketpaw"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        || _cmd("pip3")
+            .args(["show", "pocketpaw"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
 }
 
 #[derive(Serialize, Clone)]
@@ -142,15 +221,11 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
             .stderr(Stdio::piped())
             .spawn()
     } else {
-        let sh_cmd = format!(
-            "tmp=$(mktemp /tmp/pocketpaw_installer.XXXXXX.py) && \
-             curl -fsSL https://raw.githubusercontent.com/pocketpaw/pocketpaw/main/installer/installer.py -o \"$tmp\" && \
-             python3 \"$tmp\" --non-interactive --profile {} --uv-available --no-launch; \
-             rm -f \"$tmp\"",
-            profile
-        );
-        Command::new("sh")
-            .args(["-c", &sh_cmd])
+        _cmd("sh")
+            .args([
+                "-c",
+                "curl -fsSL https://pocketpaw.xyz/install.sh | sh",
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -169,6 +244,10 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
         match line {
             Ok(text) => {
                 let clean = ansi_re.replace_all(&text, "").to_string();
+                // Skip empty lines after stripping
+                if clean.trim().is_empty() {
+                    continue;
+                }
                 let _ = app.emit(
                     "install-progress",
                     InstallProgress {
@@ -203,63 +282,60 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
     Ok(success)
 }
 
+/// Spawn backend process — platform-specific to handle Windows console hiding.
+#[cfg(windows)]
+fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+
+    let path = _augmented_path();
+
+    Command::new("pocketpaw")
+        .args(["serve", "--port", port_str])
+        .env("PATH", &path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .spawn()
+        .or_else(|_| {
+            Command::new("uv")
+                .args(["run", "pocketpaw", "serve", "--port", port_str])
+                .env("PATH", &path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+                .spawn()
+        })
+}
+
+#[cfg(not(windows))]
+fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
+    let path = _augmented_path();
+
+    Command::new("pocketpaw")
+        .args(["serve", "--port", port_str])
+        .env("PATH", &path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .or_else(|_| {
+            Command::new("uv")
+                .args(["run", "pocketpaw", "serve", "--port", port_str])
+                .env("PATH", &path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        })
+}
+
 /// Start the PocketPaw backend as a detached background process on the given port.
 /// Returns immediately — frontend should poll check_backend_running to confirm.
 #[tauri::command]
 pub fn start_pocketpaw_backend(port: u16) -> Result<bool, String> {
     let port_str = port.to_string();
 
-    let result = if cfg!(windows) {
-        // Use PowerShell Start-Process -WindowStyle Hidden to launch completely hidden.
-        // The .exe shims from uv tool install are console apps that flash a CMD window
-        // even with CREATE_NO_WINDOW, so we route through PowerShell instead.
-        let ps_cmd = format!(
-            "Start-Process -FilePath 'pocketpaw' -ArgumentList 'serve','--port','{port}' -WindowStyle Hidden",
-            port = port_str
-        );
-        Command::new("powershell")
-            .args([
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &ps_cmd,
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .or_else(|_| {
-                // Fallback: try uv run
-                let ps_cmd_uv = format!(
-                    "Start-Process -FilePath 'uv' -ArgumentList 'run','pocketpaw','serve','--port','{port}' -WindowStyle Hidden",
-                    port = port_str
-                );
-                Command::new("powershell")
-                    .args([
-                        "-NonInteractive",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-Command",
-                        &ps_cmd_uv,
-                    ])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-            })
-    } else {
-        Command::new("pocketpaw")
-            .args(["serve", "--port", &port_str])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .or_else(|_| {
-                Command::new("uv")
-                    .args(["run", "pocketpaw", "serve", "--port", &port_str])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-            })
-    };
+    let result = _spawn_backend(&port_str);
 
     match result {
         Ok(_) => Ok(true),

@@ -183,7 +183,7 @@
           config_dir: string;
         }>("check_pocketpaw_installed");
 
-        if (status.has_cli) {
+        if (status.has_cli || status.has_config_dir) {
           authState = "backend_stopped";
         } else {
           authState = "backend_missing";
@@ -219,18 +219,25 @@
     const existingToken = await getValidToken();
 
     if (existingToken) {
-      await initializeStores(existingToken, undefined, masterToken ?? undefined);
-      authState = "authenticated";
+      try {
+        await initializeStores(existingToken, undefined, masterToken ?? undefined);
+        authState = "authenticated";
 
-      // Schedule auto-refresh using the stored tokens
-      const { readTokens } = await import("$lib/auth/token-store");
-      const tokens = await readTokens();
-      if (tokens) {
-        scheduleTokenRefresh(tokens, onTokenRefreshed, onTokenRefreshFailed);
+        // Schedule auto-refresh using the stored tokens
+        const { readTokens } = await import("$lib/auth/token-store");
+        const tokens = await readTokens();
+        if (tokens) {
+          scheduleTokenRefresh(tokens, onTokenRefreshed, onTokenRefreshFailed);
+        }
+
+        finishSetup();
+        return;
+      } catch (e) {
+        console.error("Failed to initialize stores:", e);
+        authState = "error";
+        authError = `Connection failed: ${e instanceof Error ? e.message : String(e)}`;
+        return;
       }
-
-      finishSetup();
-      return;
     }
 
     // No valid token — start OAuth flow

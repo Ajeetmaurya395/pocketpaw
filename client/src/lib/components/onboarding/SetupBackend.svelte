@@ -1,5 +1,8 @@
+<!-- SetupBackend.svelte
+  Updated: 2026-03-09 — Redesigned install/start UI with stepped progress,
+  elapsed timer, always-visible log, and smarter state messages. -->
 <script lang="ts">
-  import { Loader2, Download, Play, AlertCircle, ExternalLink, Box, Sparkles, Layers } from "@lucide/svelte";
+  import { Loader2, Download, Play, AlertCircle, ExternalLink, Box, Sparkles, Layers, Terminal } from "@lucide/svelte";
   import { isTauri } from "$lib/auth";
 
   type BackendState = "backend_missing" | "backend_stopped" | "installing" | "starting";
@@ -18,6 +21,10 @@
   let logContainer: HTMLDivElement | undefined = $state(undefined);
   let unlistenInstall: (() => void) | null = null;
   let selectedProfile = $state<"minimal" | "recommended" | "full">("recommended");
+  let elapsedSeconds = $state(0);
+  let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+  let installStep = $state<string>("Preparing...");
+  let showLogs = $state(false);
 
   const profiles = [
     { id: "minimal" as const, label: "Minimal", desc: "Core agent only, no extras", icon: Box },
@@ -37,11 +44,48 @@
     }
   });
 
+  function startTimer() {
+    elapsedSeconds = 0;
+    elapsedTimer = setInterval(() => {
+      elapsedSeconds++;
+    }, 1000);
+  }
+
+  function stopTimer() {
+    if (elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+  }
+
+  function formatElapsed(s: number): string {
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${m}m ${sec}s`;
+  }
+
+  // Parse installer output to determine the current step
+  function parseStep(line: string): string {
+    const lower = line.toLowerCase();
+    if (lower.includes("python") && lower.includes("not found")) return "Installing Python...";
+    if (lower.includes("installing uv") || lower.includes("uv installed")) return "Setting up uv...";
+    if (lower.includes("installing python") || lower.includes("python 3.")) return "Installing Python...";
+    if (lower.includes("installing pocketpaw") || lower.includes("pip install")) return "Installing PocketPaw...";
+    if (lower.includes("creating") && lower.includes("config")) return "Creating config...";
+    if (lower.includes("complete") || lower.includes("success")) return "Finishing up...";
+    if (lower.includes("download")) return "Downloading...";
+    return installStep; // keep previous step if no match
+  }
+
   async function startInstall() {
     if (!isTauri()) return;
     currentState = "installing";
     installLogs = [];
     error = null;
+    installStep = "Preparing...";
+    showLogs = false;
+    startTimer();
 
     try {
       const { listen } = await import("@tauri-apps/api/event");
@@ -51,14 +95,20 @@
       unlistenInstall = await listen<{ line: string; done: boolean; success: boolean }>(
         "install-progress",
         (event) => {
-          installLogs = [...installLogs, event.payload.line];
+          const line = event.payload.line;
+          installLogs = [...installLogs, line];
+          installStep = parseStep(line);
+
           if (event.payload.done) {
             unlistenInstall?.();
             unlistenInstall = null;
+            stopTimer();
             if (event.payload.success) {
+              installStep = "Installation complete!";
               startBackend();
             } else {
-              error = "Installation failed. Check the log above for details.";
+              error = "Installation failed. Check the log below for details.";
+              showLogs = true;
               currentState = "backend_missing";
             }
           }
@@ -67,6 +117,7 @@
 
       await invoke("install_pocketpaw", { profile: selectedProfile });
     } catch (e: any) {
+      stopTimer();
       error = e?.message ?? "Failed to start installer.";
       currentState = "backend_missing";
     }
@@ -76,6 +127,7 @@
     if (!isTauri()) return;
     currentState = "starting";
     error = null;
+    startTimer();
 
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -88,32 +140,26 @@
         try {
           const running = await invoke<boolean>("check_backend_running", { port: 8888 });
           if (running) {
-            // Verify it's actually PocketPaw
-            try {
-              const resp = await fetch("http://localhost:8888/api/v1/version");
-              const data = await resp.json();
-              if (data?.version) {
-                clearInterval(poll);
-                onReady();
-                return;
-              }
-            } catch {
-              // Port open but not PocketPaw yet — keep polling
-            }
+            clearInterval(poll);
+            stopTimer();
+            onReady();
           } else if (attempts >= 30) {
             clearInterval(poll);
-            error = "Backend did not start within 30 seconds.";
+            stopTimer();
+            error = "Backend did not start within 30 seconds. Try starting it manually: pocketpaw serve";
             currentState = "backend_stopped";
           }
         } catch {
           if (attempts >= 30) {
             clearInterval(poll);
+            stopTimer();
             error = "Could not verify backend status.";
             currentState = "backend_stopped";
           }
         }
       }, 1000);
     } catch (e: any) {
+      stopTimer();
       error = e?.message ?? "Failed to start backend.";
       currentState = "backend_stopped";
     }
@@ -135,7 +181,7 @@
 
     {#if currentState === "backend_missing"}
       <div class="flex flex-col gap-2">
-        <h1 class="text-2xl font-semibold text-foreground">PocketPaw Not Installed</h1>
+        <h1 class="text-2xl font-semibold text-foreground">Install PocketPaw</h1>
         <p class="text-sm text-muted-foreground">
           Choose what to install, then hit the button below.
         </p>
@@ -184,15 +230,43 @@
     {:else if currentState === "installing"}
       <div class="flex flex-col gap-2">
         <h1 class="text-2xl font-semibold text-foreground">Installing PocketPaw</h1>
-        <p class="text-sm text-muted-foreground">This may take a minute...</p>
+        <p class="text-sm text-muted-foreground">
+          {installStep}
+        </p>
       </div>
 
-      <div class="flex items-center gap-2">
-        <Loader2 class="h-4 w-4 animate-spin text-primary" />
-        <span class="text-sm text-muted-foreground">Installing...</span>
+      <!-- Progress indicator with elapsed time -->
+      <div class="flex w-full flex-col items-center gap-3">
+        <div class="flex items-center gap-2">
+          <Loader2 class="h-4 w-4 animate-spin text-primary" />
+          <span class="text-sm text-muted-foreground">
+            {formatElapsed(elapsedSeconds)} elapsed
+          </span>
+        </div>
+
+        <!-- Progress bar (indeterminate) -->
+        <div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+          <div class="h-full w-1/3 animate-pulse rounded-full bg-primary" style="animation: slide 2s ease-in-out infinite;"></div>
+        </div>
+
+        <!-- Latest log line preview -->
+        {#if installLogs.length > 0}
+          <p class="w-full truncate text-left font-mono text-[11px] text-muted-foreground/60">
+            {installLogs[installLogs.length - 1]}
+          </p>
+        {/if}
       </div>
 
-      {#if installLogs.length > 0}
+      <!-- Toggle full log -->
+      <button
+        onclick={() => showLogs = !showLogs}
+        class="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Terminal class="h-3 w-3" />
+        {showLogs ? "Hide" : "Show"} install log
+      </button>
+
+      {#if showLogs && installLogs.length > 0}
         <div
           bind:this={logContainer}
           class="max-h-48 w-full overflow-y-auto rounded-lg border border-border bg-muted/50 p-3 text-left font-mono text-xs text-muted-foreground"
@@ -205,9 +279,9 @@
 
     {:else if currentState === "backend_stopped"}
       <div class="flex flex-col gap-2">
-        <h1 class="text-2xl font-semibold text-foreground">Backend Not Running</h1>
+        <h1 class="text-2xl font-semibold text-foreground">Start PocketPaw</h1>
         <p class="text-sm text-muted-foreground">
-          PocketPaw is installed but the backend server isn't running.
+          PocketPaw is installed. Start the backend server to begin.
         </p>
       </div>
 
@@ -216,18 +290,31 @@
         class="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90"
       >
         <Play class="h-4 w-4" />
-        Start Backend
+        Start PocketPaw
       </button>
+
+      <p class="text-xs text-muted-foreground/60">
+        Or run manually: <code class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">pocketpaw serve</code>
+      </p>
 
     {:else if currentState === "starting"}
       <div class="flex flex-col gap-2">
-        <h1 class="text-2xl font-semibold text-foreground">Starting Backend</h1>
+        <h1 class="text-2xl font-semibold text-foreground">Starting PocketPaw</h1>
         <p class="text-sm text-muted-foreground">Waiting for the server to come online...</p>
       </div>
 
-      <div class="flex items-center gap-2">
-        <Loader2 class="h-4 w-4 animate-spin text-primary" />
-        <span class="text-sm text-muted-foreground">Starting...</span>
+      <div class="flex flex-col items-center gap-3">
+        <div class="flex items-center gap-2">
+          <Loader2 class="h-4 w-4 animate-spin text-primary" />
+          <span class="text-sm text-muted-foreground">
+            {formatElapsed(elapsedSeconds)} elapsed
+          </span>
+        </div>
+
+        <!-- Progress bar (indeterminate) -->
+        <div class="h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-muted">
+          <div class="h-full w-1/3 animate-pulse rounded-full bg-primary" style="animation: slide 2s ease-in-out infinite;"></div>
+        </div>
       </div>
     {/if}
 
@@ -247,3 +334,11 @@
     {/if}
   </div>
 </div>
+
+<style>
+  @keyframes slide {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(200%); }
+    100% { transform: translateX(-100%); }
+  }
+</style>
