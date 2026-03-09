@@ -266,6 +266,23 @@ class CopilotSDKBackend:
                 elif event_type == "session.idle":
                     queue.put_nowait(None)  # sentinel for done
 
+                elif event_type == "assistant.usage":
+                    input_t = getattr(data, "input_tokens", 0) or 0
+                    output_t = getattr(data, "output_tokens", 0) or 0
+                    if input_t or output_t:
+                        queue.put_nowait(
+                            AgentEvent(
+                                type="token_usage",
+                                content="",
+                                metadata={
+                                    "input_tokens": input_t,
+                                    "output_tokens": output_t,
+                                    "model": model,
+                                    "backend": "copilot_sdk",
+                                },
+                            )
+                        )
+
                 elif event_type == "error":
                     error_msg = getattr(data, "message", "Unknown Copilot SDK error")
                     queue.put_nowait(AgentEvent(type="error", content=error_msg))
