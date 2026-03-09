@@ -158,6 +158,8 @@ class CodexCLIBackend:
                                 "input_tokens": usage.get("input_tokens", 0),
                                 "output_tokens": usage.get("output_tokens", 0),
                                 "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                                "model": self.settings.codex_model or "codex-mini-latest",
+                                "backend": "codex_cli",
                             },
                         )
 

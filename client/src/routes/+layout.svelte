@@ -108,8 +108,16 @@
   }
 
   function onTokenRefreshFailed(_error: Error) {
-    authState = "error";
-    authError = "Session expired. Please sign in again.";
+    // Don't blow away the entire UI. Show a toast and let the user re-authenticate.
+    import("svelte-sonner").then(({ toast }) => {
+      toast.error("Session expired. Click 'Try again' to sign in.", {
+        duration: 10000,
+        action: {
+          label: "Sign in",
+          onClick: () => retryAuth(),
+        },
+      });
+    });
   }
 
   async function readMasterToken(): Promise<string | null> {
@@ -135,7 +143,7 @@
       return;
     }
 
-    // Step 1: Check if backend is running (TCP check)
+    // Step 1: Check if backend is running (TCP check + HTTP health validation)
     authState = "checking_backend";
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -156,6 +164,22 @@
           authState = "backend_missing";
         }
         return; // SetupBackend component takes over
+      }
+
+      // TCP is open, but validate the API is actually responding
+      try {
+        const healthRes = await fetch("http://localhost:8888/api/v1/health", {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!healthRes.ok) {
+          // API exists but returned an error, treat as "starting up"
+          authState = "backend_stopped";
+          return;
+        }
+      } catch {
+        // Port is open but API isn't responding (wrong process or still starting)
+        authState = "backend_stopped";
+        return;
       }
     } catch {
       // If Tauri commands fail, fall through to normal auth

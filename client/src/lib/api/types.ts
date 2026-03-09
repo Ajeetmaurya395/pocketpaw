@@ -312,6 +312,68 @@ export interface VersionInfo {
   agent_backend: string;
 }
 
+// -- System Metrics ---------------------------------------------------------
+
+export interface SystemMetricsCpu {
+  percent: number;
+  cores: number;
+  freq_mhz: number | null;
+}
+
+export interface SystemMetricsMemory {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetricsDisk {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetricsBattery {
+  percent: number;
+  plugged: boolean;
+  secs_left: number | null;
+}
+
+export interface SystemMetrics {
+  available: boolean;
+  os: string;
+  arch: string;
+  cpu: SystemMetricsCpu;
+  memory: SystemMetricsMemory;
+  disk: SystemMetricsDisk;
+  uptime_seconds: number;
+  battery: SystemMetricsBattery | null;
+  timestamp: string;
+  error?: string;
+}
+
+export interface UsageSummary {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cached_input_tokens: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  request_count: number;
+  by_model: Record<string, { input_tokens: number; output_tokens: number; cost_usd: number; count: number }>;
+  by_backend: Record<string, { input_tokens: number; output_tokens: number; cost_usd: number; count: number }>;
+}
+
+export interface UsageRecord {
+  timestamp: string;
+  backend: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+  cost_usd: number | null;
+  session_id: string;
+}
+
 // -- Reminders --------------------------------------------------------------
 
 export interface Reminder {
@@ -332,6 +394,15 @@ export interface FileEntry {
   name: string;
   isDir: boolean;
   size?: string;
+}
+
+export interface RecentFileEntry {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  extension: string;
+  timestamp: number;
+  tool: string;
 }
 
 // -- Token Usage ------------------------------------------------------------

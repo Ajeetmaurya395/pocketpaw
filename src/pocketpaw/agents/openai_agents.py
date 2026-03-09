@@ -254,6 +254,9 @@ class OpenAIAgentsBackend:
                 run_kwargs["session"] = session
             result = Runner.run_streamed(agent, **run_kwargs)
 
+            _total_input = 0
+            _total_output = 0
+
             async for event in result.stream_events():
                 if self._stop_flag:
                     break
@@ -261,6 +264,11 @@ class OpenAIAgentsBackend:
                 if event.type == "raw_response_event":
                     if isinstance(event.data, ResponseTextDeltaEvent):
                         yield AgentEvent(type="message", content=event.data.delta)
+                    # Capture usage from response.completed events
+                    data = event.data
+                    if hasattr(data, "usage") and data.usage:
+                        _total_input += getattr(data.usage, "input_tokens", 0)
+                        _total_output += getattr(data.usage, "output_tokens", 0)
 
                 elif event.type == "run_item_stream_event":
                     item = event.item
@@ -277,6 +285,19 @@ class OpenAIAgentsBackend:
                             content=str(item.output)[:200],
                             metadata={"name": "tool"},
                         )
+
+            # Emit token usage
+            if _total_input or _total_output:
+                yield AgentEvent(
+                    type="token_usage",
+                    content="",
+                    metadata={
+                        "input_tokens": _total_input,
+                        "output_tokens": _total_output,
+                        "model": model,
+                        "backend": "openai_agents",
+                    },
+                )
 
             yield AgentEvent(type="done", content="")
 
