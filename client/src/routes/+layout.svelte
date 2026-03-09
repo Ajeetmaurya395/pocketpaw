@@ -150,7 +150,7 @@
           config_dir: string;
         }>("check_pocketpaw_installed");
 
-        if (status.has_cli) {
+        if (status.has_cli || status.has_config_dir) {
           authState = "backend_stopped";
         } else {
           authState = "backend_missing";
