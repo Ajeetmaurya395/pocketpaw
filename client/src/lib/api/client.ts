@@ -499,8 +499,8 @@ export class PocketPawClient {
     return this.get<BackendInfo[]>("/backends");
   }
 
-  async installBackend(name: string): Promise<void> {
-    await this.post("/backends/install", { backend: name });
+  async installBackend(name: string): Promise<{ status?: string; error?: string }> {
+    return this.post<{ status?: string; error?: string }>("/backends/install", { backend: name });
   }
 
   async fetchOllamaModels(host?: string): Promise<string[]> {
