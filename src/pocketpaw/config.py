@@ -484,6 +484,21 @@ class Settings(BaseSettings):
         default=True, description="Run health checks when PocketPaw starts"
     )
 
+    # User Preferences (set during onboarding)
+    user_display_name: str = Field(default="", description="User's display name")
+    user_avatar_emoji: str = Field(default="🐾", description="User's chosen avatar emoji")
+    theme_preference: str = Field(
+        default="system", description="Theme: 'light', 'dark', or 'system'"
+    )
+    notifications_enabled: bool = Field(default=True, description="Enable desktop notifications")
+    sound_enabled: bool = Field(default=True, description="Enable notification sounds")
+    tool_notifications_enabled: bool = Field(
+        default=True, description="Show notifications for tool executions"
+    )
+    default_workspace_dir: str = Field(
+        default="", description="Default working directory for the agent"
+    )
+
     # OAuth
     google_oauth_client_id: str | None = Field(
         default=None, description="Google OAuth 2.0 client ID"

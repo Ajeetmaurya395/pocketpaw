@@ -113,6 +113,15 @@ export interface Settings {
   stt_model?: string;
   ocr_provider?: string;
 
+  // User preferences (onboarding)
+  user_display_name?: string;
+  user_avatar_emoji?: string;
+  theme_preference?: string;
+  notifications_enabled?: boolean;
+  sound_enabled?: boolean;
+  tool_notifications_enabled?: boolean;
+  default_workspace_dir?: string;
+
   [key: string]: unknown;
 }
 

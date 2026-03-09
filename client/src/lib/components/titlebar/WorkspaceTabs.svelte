@@ -12,10 +12,13 @@
     { value: "/projects", label: "Deep Work", icon: FolderKanban, match: (p) => p.startsWith("/projects") },
   ];
 
+  let { visible = true }: { visible?: boolean } = $props();
+
   let pathname = $derived(page.url.pathname);
   let activeTab = $derived(tabs.find((t) => t.match(pathname))?.value ?? "/chat");
 </script>
 
+{#if visible}
 <Tabs
   value={activeTab}
   onValueChange={(v) => { if (v) goto(v, { noScroll: true }); }}
@@ -34,3 +37,4 @@
     {/each}
   </TabsList>
 </Tabs>
+{/if}

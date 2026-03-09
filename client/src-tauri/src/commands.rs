@@ -113,26 +113,44 @@ pub struct InstallProgress {
 /// Install PocketPaw by spawning a non-interactive installer process.
 /// Streams stdout line-by-line via "install-progress" events.
 #[tauri::command]
-pub async fn install_pocketpaw(app: AppHandle, _profile: String) -> Result<bool, String> {
+pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, String> {
+    // Run the Python installer directly in non-interactive mode.
+    // We avoid the wrapper scripts (install.ps1/install.sh) because they rely on
+    // an interactive console ([Console]::OutputEncoding / Rich) which isn't
+    // available when spawned headless from Tauri with piped stdout/stderr.
+    //
+    // Flow: download installer.py to temp dir, run with --non-interactive --profile.
     let child = if cfg!(windows) {
+        // Single PowerShell command: download installer.py then run it non-interactively.
+        let ps_cmd = format!(
+            "$tmp = Join-Path $env:TEMP 'pocketpaw_installer.py'; \
+             Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/pocketpaw/pocketpaw/main/installer/installer.py' \
+               -OutFile $tmp -UseBasicParsing; \
+             python $tmp --non-interactive --profile {} --uv-available --no-launch; \
+             Remove-Item $tmp -ErrorAction SilentlyContinue",
+            profile
+        );
         Command::new("powershell")
             .args([
-                "-NoExit",
                 "-NonInteractive",
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                "iwr -useb https://pocketpaw.xyz/install.ps1 | iex",
+                &ps_cmd,
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
     } else {
+        let sh_cmd = format!(
+            "tmp=$(mktemp /tmp/pocketpaw_installer.XXXXXX.py) && \
+             curl -fsSL https://raw.githubusercontent.com/pocketpaw/pocketpaw/main/installer/installer.py -o \"$tmp\" && \
+             python3 \"$tmp\" --non-interactive --profile {} --uv-available --no-launch; \
+             rm -f \"$tmp\"",
+            profile
+        );
         Command::new("sh")
-            .args([
-                "-c",
-                "curl -fsSL https://pocketpaw.xyz/install.sh | sh",
-            ])
+            .args(["-c", &sh_cmd])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -185,54 +203,63 @@ pub async fn install_pocketpaw(app: AppHandle, _profile: String) -> Result<bool,
     Ok(success)
 }
 
-/// Spawn backend process — platform-specific to handle Windows console hiding.
-#[cfg(windows)]
-fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const DETACHED_PROCESS: u32 = 0x00000008;
-
-    Command::new("pocketpaw")
-        .args(["serve", "--port", port_str])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .spawn()
-        .or_else(|_| {
-            Command::new("uv")
-                .args(["run", "pocketpaw", "serve", "--port", port_str])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-                .spawn()
-        })
-}
-
-#[cfg(not(windows))]
-fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
-    Command::new("pocketpaw")
-        .args(["serve", "--port", port_str])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .or_else(|_| {
-            Command::new("uv")
-                .args(["run", "pocketpaw", "serve", "--port", port_str])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-        })
-}
-
-/// Start the PocketPaw backend as a detached process on the given port.
+/// Start the PocketPaw backend as a detached background process on the given port.
 /// Returns immediately — frontend should poll check_backend_running to confirm.
 #[tauri::command]
 pub fn start_pocketpaw_backend(port: u16) -> Result<bool, String> {
     let port_str = port.to_string();
 
-    // Try direct `pocketpaw serve` first, then fall back to `uv run pocketpaw serve`.
-    // On Windows, use creation_flags to hide the console window.
-    let result = _spawn_backend(&port_str);
+    let result = if cfg!(windows) {
+        // Use PowerShell Start-Process -WindowStyle Hidden to launch completely hidden.
+        // The .exe shims from uv tool install are console apps that flash a CMD window
+        // even with CREATE_NO_WINDOW, so we route through PowerShell instead.
+        let ps_cmd = format!(
+            "Start-Process -FilePath 'pocketpaw' -ArgumentList 'serve','--port','{port}' -WindowStyle Hidden",
+            port = port_str
+        );
+        Command::new("powershell")
+            .args([
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &ps_cmd,
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                // Fallback: try uv run
+                let ps_cmd_uv = format!(
+                    "Start-Process -FilePath 'uv' -ArgumentList 'run','pocketpaw','serve','--port','{port}' -WindowStyle Hidden",
+                    port = port_str
+                );
+                Command::new("powershell")
+                    .args([
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        &ps_cmd_uv,
+                    ])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            })
+    } else {
+        Command::new("pocketpaw")
+            .args(["serve", "--port", &port_str])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                Command::new("uv")
+                    .args(["run", "pocketpaw", "serve", "--port", &port_str])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            })
+    };
 
     match result {
         Ok(_) => Ok(true),

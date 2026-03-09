@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2, Download, Play, AlertCircle, ExternalLink } from "@lucide/svelte";
+  import { Loader2, Download, Play, AlertCircle, ExternalLink, Box, Sparkles, Layers } from "@lucide/svelte";
   import { isTauri } from "$lib/auth";
 
   type BackendState = "backend_missing" | "backend_stopped" | "installing" | "starting";
@@ -17,6 +17,13 @@
   let error = $state<string | null>(null);
   let logContainer: HTMLDivElement | undefined = $state(undefined);
   let unlistenInstall: (() => void) | null = null;
+  let selectedProfile = $state<"minimal" | "recommended" | "full">("recommended");
+
+  const profiles = [
+    { id: "minimal" as const, label: "Minimal", desc: "Core agent only, no extras", icon: Box },
+    { id: "recommended" as const, label: "Recommended", desc: "Dashboard, browser, channels", icon: Sparkles },
+    { id: "full" as const, label: "Full", desc: "Everything including experimental", icon: Layers },
+  ];
 
   // Sync prop changes into internal state
   $effect(() => {
@@ -58,7 +65,7 @@
         },
       );
 
-      await invoke("install_pocketpaw", { profile: "recommended" });
+      await invoke("install_pocketpaw", { profile: selectedProfile });
     } catch (e: any) {
       error = e?.message ?? "Failed to start installer.";
       currentState = "backend_missing";
@@ -81,8 +88,18 @@
         try {
           const running = await invoke<boolean>("check_backend_running", { port: 8888 });
           if (running) {
-            clearInterval(poll);
-            onReady();
+            // Verify it's actually PocketPaw
+            try {
+              const resp = await fetch("http://localhost:8888/api/v1/version");
+              const data = await resp.json();
+              if (data?.version) {
+                clearInterval(poll);
+                onReady();
+                return;
+              }
+            } catch {
+              // Port open but not PocketPaw yet — keep polling
+            }
           } else if (attempts >= 30) {
             clearInterval(poll);
             error = "Backend did not start within 30 seconds.";
@@ -112,7 +129,7 @@
   }
 </script>
 
-<div class="flex h-dvh w-screen items-center justify-center bg-background">
+<div class="flex h-full w-full items-center justify-center">
   <div class="flex w-full max-w-md flex-col items-center gap-6 px-6 text-center">
     <span class="text-5xl">🐾</span>
 
@@ -120,8 +137,30 @@
       <div class="flex flex-col gap-2">
         <h1 class="text-2xl font-semibold text-foreground">PocketPaw Not Installed</h1>
         <p class="text-sm text-muted-foreground">
-          The PocketPaw backend needs to be installed before you can get started.
+          Choose what to install, then hit the button below.
         </p>
+      </div>
+
+      <!-- Profile selector -->
+      <div class="flex w-full flex-col gap-2">
+        {#each profiles as p}
+          {@const Icon = p.icon}
+          <button
+            onclick={() => (selectedProfile = p.id)}
+            class="flex items-center gap-3 rounded-xl border-2 p-3.5 text-left transition-all
+              {selectedProfile === p.id
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:border-primary/30'}"
+          >
+            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg {selectedProfile === p.id ? 'bg-primary/15' : 'bg-muted'}">
+              <Icon class="h-4 w-4 {selectedProfile === p.id ? 'text-primary' : 'text-muted-foreground'}" />
+            </div>
+            <div class="flex flex-col">
+              <span class="text-sm font-medium text-foreground">{p.label}</span>
+              <span class="text-xs text-muted-foreground">{p.desc}</span>
+            </div>
+          </button>
+        {/each}
       </div>
 
       <button
