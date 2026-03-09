@@ -1,5 +1,6 @@
 # File browser router — directory listing + file content serving.
 # Created: 2026-02-20
+# Updated: 2026-03-09 — Add auth scope dependency (require_scope("files"))
 
 from __future__ import annotations
 
@@ -7,8 +8,10 @@ import logging
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+
+from pocketpaw.api.deps import require_scope
 
 from pocketpaw.api.v1.schemas.files import (
     BrowseResponse,
@@ -19,7 +22,7 @@ from pocketpaw.api.v1.schemas.files import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Files"])
+router = APIRouter(tags=["Files"], dependencies=[Depends(require_scope("files"))])
 
 
 @router.get("/files/browse", response_model=BrowseResponse)

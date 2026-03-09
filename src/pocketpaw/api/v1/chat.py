@@ -2,6 +2,7 @@
 # Created: 2026-02-20
 # Updated: 2026-02-25 — Tighten SSE session filter: block events without session_key
 #   instead of silently passing them through to all clients.
+# Updated: 2026-03-09 — Reduce blocking chat timeout from 3600s to 120s
 #
 # Enables external clients to send messages and receive responses via HTTP.
 # SSE streaming reuses the entire AgentLoop pipeline via _APISessionBridge.
@@ -209,8 +210,9 @@ async def chat_send(body: ChatRequest):
     try:
         while True:
             try:
-                # Long timeout — agent tool use can run for hours
-                event = await asyncio.wait_for(bridge.queue.get(), timeout=3600)
+                # 120s timeout — desktop clients should use the SSE stream
+                # endpoint (/chat/stream) for long-running agent tasks.
+                event = await asyncio.wait_for(bridge.queue.get(), timeout=120)
             except TimeoutError:
                 break
 
