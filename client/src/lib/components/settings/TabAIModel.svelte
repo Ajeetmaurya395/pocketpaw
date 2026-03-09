@@ -253,9 +253,13 @@
     installing = backend.name;
     try {
       const client = connectionStore.getClient();
-      await client.installBackend(backend.name);
-      toast.success(`Installing ${backend.displayName}...`);
-      setTimeout(loadBackends, 3000);
+      const result = await client.installBackend(backend.name);
+      if (result.error) {
+        toast.error(`Failed to install ${backend.displayName}: ${result.error}`);
+        return;
+      }
+      toast.success(`${backend.displayName} installed successfully`);
+      await loadBackends();
     } catch {
       toast.error(`Failed to install ${backend.displayName}`);
     } finally {
@@ -411,15 +415,16 @@
                   <!-- pip-installable: show Install button -->
                   <button
                     onclick={() => handleInstall(backend)}
-                    disabled={installing === backend.name}
+                    disabled={installing !== null}
                     class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground disabled:opacity-40"
                   >
                     {#if installing === backend.name}
                       <Loader2 class="h-3 w-3 animate-spin" />
+                      Installing...
                     {:else}
                       <Download class="h-3 w-3" />
+                      Install
                     {/if}
-                    Install
                   </button>
                 {:else if hint.external_cmd}
                   <!-- External cmd: show Copy button -->
