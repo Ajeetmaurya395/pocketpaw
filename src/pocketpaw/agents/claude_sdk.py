@@ -74,7 +74,7 @@ class ClaudeSDKBackend:
                 "WebFetch",
             ],
             tool_policy_map=ClaudeSDKBackend._TOOL_POLICY_MAP,
-            required_keys=[],
+            required_keys=["anthropic_api_key"],
             supported_providers=["anthropic", "ollama", "openai_compatible"],
         )
 
@@ -679,15 +679,27 @@ class ClaudeSDKBackend:
             provider = self.settings.claude_sdk_provider or "anthropic"
             llm = resolve_llm_client(self.settings, force_provider=provider)
 
-            # ── API key enforcement TEMPORARILY DISABLED ──────────────
-            # TODO: Re-enable once API key distribution is sorted out.
-            # if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
-            #     has_api_key = bool(
-            #         llm.api_key or os.environ.get("ANTHROPIC_API_KEY")
-            #     )
-            #     if not has_api_key:
-            #         yield AgentEvent(type="error", content="API key required")
-            #         return
+            # ── API key check for Anthropic provider ──────────────
+            if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
+                has_api_key = bool(
+                    llm.api_key or os.environ.get("ANTHROPIC_API_KEY")
+                )
+                if not has_api_key:
+                    yield AgentEvent(
+                        type="error",
+                        content=(
+                            "**API key required** -- The Claude SDK backend needs "
+                            "an Anthropic API key.\n\n"
+                            "**How to fix:**\n"
+                            "1. Get an API key at "
+                            "[console.anthropic.com](https://console.anthropic.com/api-keys)\n"
+                            "2. Add it in **Settings > API Keys > Anthropic API Key**\n"
+                            "3. Or set the `ANTHROPIC_API_KEY` environment variable\n\n"
+                            "*Alternatively, switch to **Ollama (Local)** in Settings "
+                            "> General for free local inference.*"
+                        ),
+                    )
+                    return
 
             # Smart model routing — classify BEFORE prompt composition so we
             # can skip tool instructions for SIMPLE messages and dispatch to
@@ -1050,16 +1062,8 @@ class ClaudeSDKBackend:
                             )
 
                         if is_error:
-                            # Temporarily suppress API-key errors
-                            _result_str = str(result)
-                            if "api key" in _result_str.lower():
-                                logger.warning(
-                                    "Suppressed API-key error from SDK: %s",
-                                    _result_str[:200],
-                                )
-                            else:
-                                logger.error(f"ResultMessage error: {result}")
-                                yield AgentEvent(type="error", content=_result_str)
+                            logger.error(f"ResultMessage error: {result}")
+                            yield AgentEvent(type="error", content=str(result))
                         else:
                             logger.debug(f"ResultMessage: {str(result)[:100]}...")
                         continue

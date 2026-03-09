@@ -1,6 +1,7 @@
 """
 Builder for assembling the full agent context.
 Created: 2026-02-02
+Updated: 2026-03-09 - Sanitize file_context paths before injecting into system prompt
 Updated: 2026-02-17 - Inject health state into system prompt when degraded/unhealthy
 Updated: 2026-02-07 - Semantic context injection for mem0 backend
 Updated: 2026-02-10 - Channel-aware format hints
@@ -114,13 +115,20 @@ class AgentContextBuilder:
 
         # 6. Inject file context from desktop client
         if file_context:
+            import re
+
+            def _sanitize_path(p: str) -> str:
+                """Strip non-path characters to prevent prompt injection."""
+                return re.sub(r"[^\w\s\-./\\:~]", "", p).strip()
+
             fc_parts = []
             if file_context.get("current_dir"):
-                fc_parts.append(f"Working directory: {file_context['current_dir']}")
+                fc_parts.append(f"Working directory: {_sanitize_path(file_context['current_dir'])}")
             if file_context.get("open_file"):
-                fc_parts.append(f"Open file: {file_context['open_file']}")
+                fc_parts.append(f"Open file: {_sanitize_path(file_context['open_file'])}")
             if file_context.get("selected_files"):
-                fc_parts.append(f"Selected files: {', '.join(file_context['selected_files'])}")
+                safe_files = [_sanitize_path(f) for f in file_context["selected_files"]]
+                fc_parts.append(f"Selected files: {', '.join(safe_files)}")
             if fc_parts:
                 parts.append("\n# File Context\n" + "\n".join(fc_parts))
 

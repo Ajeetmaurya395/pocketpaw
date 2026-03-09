@@ -1,5 +1,6 @@
 # Chat router — send, stream (SSE), stop.
 # Created: 2026-02-20
+# Updated: 2026-03-09 — Reduce blocking chat timeout from 3600s to 300s
 # Updated: 2026-02-25 — Tighten SSE session filter: block events without session_key
 #   instead of silently passing them through to all clients.
 #
@@ -209,8 +210,10 @@ async def chat_send(body: ChatRequest):
     try:
         while True:
             try:
-                # Long timeout — agent tool use can run for hours
-                event = await asyncio.wait_for(bridge.queue.get(), timeout=3600)
+                # 5 min timeout per chunk — generous for tool use but won't
+                # hang the client for an hour on failure.  Streaming endpoint
+                # is preferred for long-running agent tasks.
+                event = await asyncio.wait_for(bridge.queue.get(), timeout=300)
             except TimeoutError:
                 break
 

@@ -68,8 +68,7 @@ class TestGetBackendInfo:
     def test_claude_sdk_required_keys(self):
         info = get_backend_info("claude_agent_sdk")
         assert info is not None
-        # API key enforcement temporarily disabled; required_keys is empty
-        assert info.required_keys == []
+        assert "anthropic_api_key" in info.required_keys
         assert "anthropic" in info.supported_providers
         assert "ollama" in info.supported_providers
         assert "openai_compatible" in info.supported_providers

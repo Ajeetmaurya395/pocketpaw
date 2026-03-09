@@ -2,6 +2,8 @@
 
 Provides CRUD operations for kit management and data resolution
 for command center panels.
+
+Updated: 2026-03-09 — Added auth scope dependency for access control.
 """
 
 from __future__ import annotations
@@ -9,12 +11,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from pocketpaw.api.deps import require_scope
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["Kits"])
+router = APIRouter(tags=["Kits"], dependencies=[Depends(require_scope("kits"))])
 
 
 # ---------------------------------------------------------------------------
