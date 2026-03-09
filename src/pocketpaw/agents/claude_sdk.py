@@ -10,6 +10,7 @@ Uses the official Claude Agent SDK (pip install claude-agent-sdk) which provides
 """
 
 import logging
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -197,33 +198,31 @@ class ClaudeSDKBackend:
         return None
 
     # Patterns that indicate an OS-level "open file" command.
-    import re as _re
-
     _FILE_OPEN_PATTERNS = [
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*start\s+(?:\"\"?\s*)?(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*explorer(?:\.exe)?\s+(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*xdg-open\s+(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*open\s+(?!-a)(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*(?:powershell(?:\.exe)?\s+(?:-[Cc]ommand\s+)?)?"
             r"Invoke-Item\s+(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
-        _re.compile(
+        re.compile(
             r"(?:^|&&|\|\||;)\s*cmd\s+/[cC]\s+start\s+(?:\"\"?\s*)?(.+)",
-            _re.IGNORECASE,
+            re.IGNORECASE,
         ),
     ]
 
