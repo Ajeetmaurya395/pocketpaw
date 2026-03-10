@@ -108,7 +108,13 @@ class LLMClient:
     @property
     def is_openrouter(self) -> bool:
         """True when the endpoint is OpenRouter's Anthropic-compatible skin."""
-        return "openrouter.ai" in self.openai_compatible_base_url.lower()
+        from urllib.parse import urlparse
+
+        try:
+            host = urlparse(self.openai_compatible_base_url).hostname or ""
+            return host == "openrouter.ai" or host.endswith(".openrouter.ai")
+        except Exception:
+            return False
 
     def to_sdk_env(self) -> dict[str, str]:
         """Build env-var dict for the Claude Agent SDK subprocess.
@@ -133,6 +139,9 @@ class LLMClient:
                     base_url = base_url[:-3].rstrip("/")
                 env: dict[str, str] = {
                     "ANTHROPIC_BASE_URL": base_url,
+                    # Must be empty string, not omitted. OpenRouter authenticates
+                    # via ANTHROPIC_AUTH_TOKEN; if ANTHROPIC_API_KEY is set to a
+                    # real value, the SDK sends it as Bearer and OpenRouter rejects it.
                     "ANTHROPIC_API_KEY": "",
                 }
                 if self.api_key:
@@ -297,8 +306,8 @@ def resolve_llm_client(
         # the openrouter.ai URL and set the correct env vars.
         return LLMClient(
             provider="openai_compatible",
-            model=settings.openai_compatible_model,
-            api_key=settings.openai_compatible_api_key,
+            model=settings.openrouter_model or settings.openai_compatible_model,
+            api_key=settings.openrouter_api_key or settings.openai_compatible_api_key,
             ollama_host=settings.ollama_host,
             openai_compatible_base_url="https://openrouter.ai/api/v1",
         )

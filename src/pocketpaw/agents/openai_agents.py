@@ -153,7 +153,8 @@ class OpenAIAgentsBackend:
         try:
             from pocketpaw.agents.tool_bridge import build_openai_function_tools
 
-            self._custom_tools = build_openai_function_tools(self.settings)
+            # Cache tools at init; the tool set doesn't change at runtime.
+            self._custom_tools = build_openai_function_tools(self.settings, backend="openai_agents")
         except Exception as exc:
             logger.debug("Could not build custom tools: %s", exc)
             self._custom_tools = []
@@ -182,8 +183,16 @@ class OpenAIAgentsBackend:
                 client = AsyncOpenAI(base_url=base_url, api_key="ollama")
             elif provider == "openrouter":
                 base_url = "https://openrouter.ai/api/v1"
-                api_key = self.settings.openai_compatible_api_key or "none"
-                model_name = self.settings.openai_compatible_model or model_name
+                api_key = (
+                    self.settings.openrouter_api_key
+                    or self.settings.openai_compatible_api_key
+                    or "none"
+                )
+                model_name = (
+                    self.settings.openrouter_model
+                    or self.settings.openai_compatible_model
+                    or model_name
+                )
                 client = AsyncOpenAI(base_url=base_url, api_key=api_key)
             else:
                 base_url = self.settings.openai_compatible_base_url

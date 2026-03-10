@@ -44,7 +44,7 @@
     openai: ["gpt-5.2", "gpt-4o", "gpt-4o-mini", "o1-preview"],
     google: ["gemini-3-pro-preview", "gemini-2.0-flash", "gemini-1.5-pro"],
     ollama: ["llama3.2", "mistral", "codellama", "gemma2", "phi3"],
-    openrouter: [],
+    openrouter: [], // 300+ models; user types the slug directly
     openai_compatible: [],
     copilot: [],
     azure: [],
@@ -296,7 +296,7 @@
       }
 
       if (selectedProvider === "openrouter") {
-        patch.openai_compatible_model = effectiveModel;
+        patch.openrouter_model = effectiveModel;
       }
 
       if (selectedProvider === "openai_compatible") {

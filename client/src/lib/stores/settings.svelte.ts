@@ -55,7 +55,7 @@ class SettingsStore {
       google: "google_api_key",
       gemini: "google_api_key",
       ollama: "ollama_host",
-      openrouter: "openai_compatible_api_key",
+      openrouter: "openrouter_api_key",
       openai_compatible: "openai_compatible_api_key",
     };
     const fieldName = providerFieldMap[provider.toLowerCase()] ?? `${provider.toLowerCase()}_api_key`;
