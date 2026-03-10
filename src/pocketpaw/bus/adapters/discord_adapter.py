@@ -1,6 +1,8 @@
 """
 Discord Channel Adapter.
 Created: 2026-02-06
+Modified: 2026-03-10 - admin gate on /info, setname sanitization,
+    conversation history char budget, sentinel bot author key.
 """
 
 import asyncio
@@ -14,7 +16,10 @@ logger = logging.getLogger(__name__)
 
 DISCORD_MSG_LIMIT = 2000
 _CONVERSATION_HISTORY_SIZE = 30
+_CONVERSATION_CHAR_BUDGET = 12_000  # Max total chars in conversation context sent to LLM
 _NO_RESPONSE_MARKER = "[NO_RESPONSE]"
+_BOT_AUTHOR_KEY = "__bot__"
+_MAX_BOT_NAME_LENGTH = 64
 
 # Valid activity types for the /setstatus command
 _ACTIVITY_TYPES = {"playing", "watching", "listening", "competing"}
@@ -131,20 +136,20 @@ class DiscordAdapter(BaseChannelAdapter):
         history = self._conversation_history.get(channel_id, [])
         if len(history) >= 2:
             prev = history[-2]
-            if prev["author"] == self.bot_name:
+            if prev["author"] == _BOT_AUTHOR_KEY:
                 return "engaged"
 
         # Question mark and bot was active in last 6 messages
         if lower.rstrip().endswith("?"):
             recent = history[-6:]
             for msg in recent:
-                if msg["author"] == self.bot_name:
+                if msg["author"] == _BOT_AUTHOR_KEY:
                     return "engaged"
 
         # Bot active in last 3 messages -> stay in the conversation
         recent_short = history[-3:]
         for msg in recent_short:
-            if msg["author"] == self.bot_name:
+            if msg["author"] == _BOT_AUTHOR_KEY:
                 return "engaged"
 
         return None
@@ -156,8 +161,21 @@ class DiscordAdapter(BaseChannelAdapter):
         history = self._conversation_history.get(channel_id, [])
         if not history:
             return ""
-        lines = [f"{m['author']}: {m['content']}" for m in history]
-        history_block = "Recent messages:\n" + "\n".join(lines)
+        # Build lines from most recent, staying within the character budget
+        all_lines = [
+            f"{self.bot_name if m['author'] == _BOT_AUTHOR_KEY else m['author']}: {m['content']}"
+            for m in history
+        ]
+        # Walk backwards, keeping lines that fit the budget
+        kept: list[str] = []
+        budget = _CONVERSATION_CHAR_BUDGET
+        for line in reversed(all_lines):
+            if budget - len(line) < 0 and kept:
+                break
+            kept.append(line)
+            budget -= len(line)
+        kept.reverse()
+        history_block = "Recent messages:\n" + "\n".join(kept)
 
         if mode == "addressed":
             # Bot was directly called by name -> just respond, no skip option
@@ -347,8 +365,14 @@ class DiscordAdapter(BaseChannelAdapter):
                 f"Pong! Latency: **{latency_ms}ms**", ephemeral=True
             )
 
-        @tree.command(name="info", description="Show PocketPaw bot info")
+        @tree.command(name="info", description="Show PocketPaw bot info (admin only)")
         async def info_command(interaction: discord.Interaction):
+            if not adapter._is_admin(interaction):
+                await interaction.response.send_message(
+                    "You need **Administrator** permission to use this.", ephemeral=True
+                )
+                return
+
             uptime_secs = int(time.time() - adapter._start_time)
             hours, remainder = divmod(uptime_secs, 3600)
             minutes, secs = divmod(remainder, 60)
@@ -428,9 +452,15 @@ class DiscordAdapter(BaseChannelAdapter):
                     adapter.activity_text = text
                 changed.append(f"Activity: **{activity} {adapter.activity_text}**")
             elif text:
+                if not adapter.activity_type:
+                    await interaction.response.send_message(
+                        "Set an `activity` type first (e.g. `/setstatus activity:playing "
+                        "text:something`).",
+                        ephemeral=True,
+                    )
+                    return
                 adapter.activity_text = text
-                if adapter.activity_type:
-                    changed.append(f"Activity text: **{text}**")
+                changed.append(f"Activity text: **{text}**")
 
             if not changed:
                 await interaction.response.send_message(
@@ -677,8 +707,17 @@ class DiscordAdapter(BaseChannelAdapter):
                 )
                 return
 
+            # Sanitize: strip brackets to prevent prompt injection, enforce length cap
+            sanitized = name.strip().replace("[", "").replace("]", "")
+            sanitized = sanitized[:_MAX_BOT_NAME_LENGTH].strip()
+            if not sanitized:
+                await interaction.response.send_message(
+                    "Invalid name. Provide a name without brackets.", ephemeral=True
+                )
+                return
+
             old_name = adapter.bot_name
-            adapter.bot_name = name.strip()
+            adapter.bot_name = sanitized
             adapter._save_restrictions()
             await interaction.response.send_message(
                 f"Bot name changed from **{old_name}** to **{adapter.bot_name}**.",
@@ -705,10 +744,11 @@ class DiscordAdapter(BaseChannelAdapter):
         @client.event
         async def on_message(message: discord.Message):
             if message.author == client.user:
-                # Track bot's own messages in conversation history
+                # Track bot's own messages using a sentinel key so _should_respond
+                # still works correctly even if /setname changes the display name.
                 ch_id = message.channel.id
                 if ch_id in adapter.conversation_channel_ids:
-                    adapter._add_to_conversation_history(ch_id, adapter.bot_name, message.content)
+                    adapter._add_to_conversation_history(ch_id, _BOT_AUTHOR_KEY, message.content)
                 return
 
             is_dm = message.guild is None
@@ -731,7 +771,10 @@ class DiscordAdapter(BaseChannelAdapter):
             if not is_dm and not is_mention and not is_conversation:
                 return
 
-            # Auth check (skip channel restriction for conversation channels)
+            # Conversation channels bypass the allowed_channel_ids check because
+            # they have their own explicit allowlist (conversation_channel_ids).
+            # Passing None for channel_id skips only the channel restriction;
+            # guild and user restrictions still apply.
             ch_for_auth = None if is_conversation else (message.channel.id if not is_dm else None)
             if not adapter._check_auth(message.guild, message.author, ch_for_auth):
                 return
