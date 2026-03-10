@@ -24,31 +24,50 @@ fn _augmented_path() -> String {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
     let home_str = home.to_string_lossy();
 
-    let extra_dirs = [
-        format!("{}/.local/bin", home_str),          // pip install --user
-        format!("{}/.cargo/bin", home_str),           // cargo, uv
-        "/opt/homebrew/bin".to_string(),              // Homebrew on Apple Silicon
-        "/opt/homebrew/sbin".to_string(),
-        "/usr/local/bin".to_string(),                 // Homebrew on Intel, manual installs
-        "/usr/local/sbin".to_string(),
-        format!("{}/Library/Python/3.11/bin", home_str), // macOS framework Python
-        format!("{}/Library/Python/3.12/bin", home_str),
-        format!("{}/Library/Python/3.13/bin", home_str),
-    ];
+    let separator = if cfg!(windows) { ";" } else { ":" };
 
-    let mut parts: Vec<&str> = current.split(':').collect();
+    let extra_dirs: Vec<String> = if cfg!(windows) {
+        vec![
+            format!("{}\\.local\\bin", home_str),
+            format!("{}\\.cargo\\bin", home_str),
+            format!("{}\\AppData\\Local\\Programs\\Python\\Python311\\Scripts", home_str),
+            format!("{}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts", home_str),
+            format!("{}\\AppData\\Local\\Programs\\Python\\Python313\\Scripts", home_str),
+            format!("{}\\AppData\\Roaming\\Python\\Python311\\Scripts", home_str),
+            format!("{}\\AppData\\Roaming\\Python\\Python312\\Scripts", home_str),
+            format!("{}\\AppData\\Roaming\\Python\\Python313\\Scripts", home_str),
+        ]
+    } else {
+        vec![
+            format!("{}/.local/bin", home_str),
+            format!("{}/.cargo/bin", home_str),
+            "/opt/homebrew/bin".to_string(),
+            "/opt/homebrew/sbin".to_string(),
+            "/usr/local/bin".to_string(),
+            "/usr/local/sbin".to_string(),
+            format!("{}/Library/Python/3.11/bin", home_str),
+            format!("{}/Library/Python/3.12/bin", home_str),
+            format!("{}/Library/Python/3.13/bin", home_str),
+        ]
+    };
+
+    let mut parts: Vec<&str> = current.split(separator).collect();
     for dir in &extra_dirs {
         if !parts.contains(&dir.as_str()) {
             parts.push(dir);
         }
     }
-    parts.join(":")
+    parts.join(separator)
 }
 
 /// Create a Command with the augmented PATH set.
+/// Sets CWD to the home directory to avoid picking up local pyproject.toml.
 fn _cmd(program: &str) -> Command {
     let mut cmd = Command::new(program);
     cmd.env("PATH", _augmented_path());
+    if let Some(home) = dirs::home_dir() {
+        cmd.current_dir(home);
+    }
     cmd
 }
 
@@ -81,6 +100,51 @@ pub fn check_backend_running(port: u16) -> Result<bool, String> {
     ) {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+/// Check if the backend on the given port is actually PocketPaw by hitting /api/v1/version.
+/// Done from Rust to avoid CORS/mixed-content issues in the Tauri webview.
+#[tauri::command]
+pub fn check_pocketpaw_version(port: u16) -> Result<Option<String>, String> {
+    let url = format!("http://127.0.0.1:{}/api/v1/version", port);
+    let client = std::net::TcpStream::connect_timeout(
+        &format!("127.0.0.1:{}", port)
+            .parse()
+            .map_err(|e| format!("{}", e))?,
+        Duration::from_secs(2),
+    );
+    if client.is_err() {
+        return Ok(None);
+    }
+
+    // Use a simple blocking HTTP GET
+    let agent = ureq::Agent::new_with_config(
+        ureq::config::Config::builder()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build(),
+    );
+    match agent.get(&url).call() {
+        Ok(response) => {
+            let body: String = response
+                .into_body()
+                .read_to_string()
+                .unwrap_or_default();
+            // Parse JSON to extract "version" field
+            if let Some(start) = body.find("\"version\"") {
+                if let Some(colon) = body[start..].find(':') {
+                    let after_colon = &body[start + colon + 1..];
+                    let trimmed = after_colon.trim_start();
+                    if trimmed.starts_with('"') {
+                        if let Some(end) = trimmed[1..].find('"') {
+                            return Ok(Some(trimmed[1..1 + end].to_string()));
+                        }
+                    }
+                }
+            }
+            Ok(None)
+        }
+        Err(_) => Ok(None),
     }
 }
 
@@ -153,9 +217,11 @@ fn _check_binary_at_known_paths() -> bool {
 }
 
 /// Check if `pocketpaw` is available via `uv run`
+/// Uses --no-project --isolated so it won't resolve from a local pyproject.toml
+/// or cached virtual environments
 fn _check_cli_via_uv() -> bool {
     _cmd("uv")
-        .args(["run", "pocketpaw", "--version"])
+        .args(["run", "--no-project", "--isolated", "pocketpaw", "--version"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -200,6 +266,9 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
     //
     // Flow: download installer.py to temp dir, run with --non-interactive --profile.
     let child = if cfg!(windows) {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         // Single PowerShell command: download installer.py then run it non-interactively.
         let ps_cmd = format!(
             "$tmp = Join-Path $env:TEMP 'pocketpaw_installer.py'; \
@@ -219,6 +288,7 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
     } else {
         _cmd("sh")
@@ -237,7 +307,7 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
     let reader = BufReader::new(stdout);
 
     // Strip ANSI escape sequences from installer output
-    let ansi_re = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^[\]].?")
+    let ansi_re = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[^\[\]].?")
         .unwrap();
 
     for line in reader.lines() {
@@ -283,20 +353,25 @@ pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, 
 }
 
 /// Spawn backend process — platform-specific to handle Windows console hiding.
+/// Uses CREATE_NO_WINDOW to suppress console + CREATE_NEW_PROCESS_GROUP so the
+/// backend survives if the Tauri app exits. DETACHED_PROCESS is avoided because
+/// it conflicts with CREATE_NO_WINDOW and can spawn a visible console for child processes.
 #[cfg(windows)]
 fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
 
     let path = _augmented_path();
+    let flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
 
     Command::new("pocketpaw")
         .args(["serve", "--port", port_str])
         .env("PATH", &path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .stdin(Stdio::null())
+        .creation_flags(flags)
         .spawn()
         .or_else(|_| {
             Command::new("uv")
@@ -304,7 +379,8 @@ fn _spawn_backend(port_str: &str) -> std::io::Result<std::process::Child> {
                 .env("PATH", &path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+                .stdin(Stdio::null())
+                .creation_flags(flags)
                 .spawn()
         })
 }
