@@ -3,6 +3,8 @@
 Core event loop that consumes from the message bus, feeds messages
 through AgentRouter (which delegates to the configured backend),
 and streams AgentEvent responses back to channels.
+
+PII scanning before memory storage is opt-in via pii_scan_enabled + pii_scan_memory settings.
 """
 
 import asyncio
@@ -300,6 +302,19 @@ class AgentLoop:
                 if scan_result.threat_level != ThreatLevel.NONE:
                     content = scan_result.sanitized_content
 
+            # PII scan before memory storage (opt-in)
+            if self.settings.pii_scan_enabled and self.settings.pii_scan_memory:
+                from pocketpaw.security.pii import get_pii_scanner
+
+                pii_result = get_pii_scanner().scan(content, source=session_key)
+                if pii_result.has_pii:
+                    logger.info(
+                        "PII detected in %s: %s",
+                        session_key,
+                        [t.value for t in pii_result.pii_types_found],
+                    )
+                    content = pii_result.sanitized_text
+
             # 1. Store User Message
             await self.memory.add_to_session(
                 session_key=session_key,
@@ -514,8 +529,15 @@ class AgentLoop:
             if cancelled and full_response:
                 full_response += "\n\n[Response interrupted]"
             if full_response:
+                stored_response = full_response
+                if self.settings.pii_scan_enabled and self.settings.pii_scan_memory:
+                    from pocketpaw.security.pii import get_pii_scanner
+
+                    pii_result = get_pii_scanner().scan(full_response, source="assistant_response")
+                    if pii_result.has_pii:
+                        stored_response = pii_result.sanitized_text
                 await self.memory.add_to_session(
-                    session_key=session_key, role="assistant", content=full_response
+                    session_key=session_key, role="assistant", content=stored_response
                 )
 
                 # 6. Auto-learn: extract facts from conversation (non-blocking)
