@@ -75,7 +75,7 @@ class ClaudeSDKBackend:
             ],
             tool_policy_map=ClaudeSDKBackend._TOOL_POLICY_MAP,
             required_keys=["anthropic_api_key"],
-            supported_providers=["anthropic", "ollama", "openai_compatible"],
+            supported_providers=["anthropic", "ollama", "openrouter", "openai_compatible"],
         )
 
     def __init__(self, settings: Settings):
@@ -664,9 +664,7 @@ class ClaudeSDKBackend:
 
             # ── API key check for Anthropic provider ──────────────
             if not (llm.is_ollama or llm.is_openai_compatible or llm.is_gemini):
-                has_api_key = bool(
-                    llm.api_key or os.environ.get("ANTHROPIC_API_KEY")
-                )
+                has_api_key = bool(llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
                 if not has_api_key:
                     yield AgentEvent(
                         type="error",
