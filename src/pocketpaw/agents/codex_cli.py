@@ -7,12 +7,18 @@ Built-in tools: shell (command_execution), file editing (file_change),
 MCP tool calls, web search.
 
 Requires: OPENAI_API_KEY (or CODEX_API_KEY) env var and `codex` on PATH.
+
+Note: The prompt is passed via stdin (using "-" as the prompt arg) rather than
+as a command-line argument.  This avoids the Windows command-line length limit
+(~8191 chars).  Codex CLI added stdin support in v0.1.2504.
 """
 
 import asyncio
 import json
 import logging
+import re
 import shutil
+import subprocess
 import sys
 from collections.abc import AsyncIterator
 from typing import Any
@@ -22,6 +28,9 @@ from pocketpaw.agents.protocol import AgentEvent
 from pocketpaw.config import Settings
 
 logger = logging.getLogger(__name__)
+
+# Only allow safe characters in model names to prevent shell injection
+_MODEL_NAME_RE = re.compile(r"^[\w\-.:]+$")
 
 
 class CodexCLIBackend:
@@ -108,7 +117,17 @@ class CodexCLIBackend:
 
             model = self.settings.codex_cli_model or "gpt-5.3-codex"
 
-            codex_bin = self._codex_path or "codex"
+            # Validate model name to prevent shell injection (C1)
+            if not _MODEL_NAME_RE.match(model):
+                yield AgentEvent(
+                    type="error",
+                    content=f"Invalid model name: {model!r}. "
+                    "Only alphanumeric characters, hyphens, dots, colons, "
+                    "and underscores are allowed.",
+                )
+                return
+
+            codex_bin = self._codex_path
             # Use "-" as the prompt arg so the actual prompt is read from
             # stdin.  This avoids the Windows command-line length limit
             # (~8191 chars) which is easily hit when system prompts and
@@ -125,8 +144,6 @@ class CodexCLIBackend:
             if sys.platform == "win32":
                 # On Windows, npm global installs are .cmd wrappers that
                 # create_subprocess_exec cannot run directly. Use shell mode.
-                import subprocess
-
                 shell_cmd = subprocess.list2cmdline([codex_bin, *args])
                 self._process = await asyncio.create_subprocess_shell(
                     shell_cmd,
@@ -145,10 +162,22 @@ class CodexCLIBackend:
 
             # Feed the prompt via stdin and close to signal EOF
             if self._process.stdin:
-                self._process.stdin.write(full_prompt.encode("utf-8"))
-                await self._process.stdin.drain()
-                self._process.stdin.close()
-                await self._process.stdin.wait_closed()
+                try:
+                    self._process.stdin.write(full_prompt.encode("utf-8"))
+                    await self._process.stdin.drain()
+                    self._process.stdin.close()
+                    await self._process.stdin.wait_closed()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Codex CLI crashed before reading stdin
+                    stderr_out = ""
+                    if self._process.stderr:
+                        stderr_bytes = await self._process.stderr.read()
+                        stderr_out = stderr_bytes.decode("utf-8", errors="replace").strip()
+                    msg = "Codex CLI exited before reading the prompt"
+                    if stderr_out:
+                        msg += f": {stderr_out[:200]}"
+                    yield AgentEvent(type="error", content=msg)
+                    return
 
             if self._process.stdout is None:
                 yield AgentEvent(type="error", content="Failed to capture Codex CLI stdout")

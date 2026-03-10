@@ -652,7 +652,8 @@ class TestCodexCLICrossBackend:
         if sys.platform == "win32":
             # On Windows, create_subprocess_shell receives a single string
             cmd_str = captured_cmd[0]
-            assert "codex" in cmd_str
+            # Ensure "codex" appears as the binary, not as part of a model name
+            assert cmd_str.split()[0].endswith("codex")
             assert "exec" in cmd_str
             assert "--json" in cmd_str
             assert "--full-auto" in cmd_str
@@ -665,6 +666,88 @@ class TestCodexCLICrossBackend:
             assert "--full-auto" in cmd_list
             assert "--model" in cmd_list
             assert "-" in cmd_list  # prompt read from stdin
+
+
+class TestCodexCLIValidation:
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_rejects_malicious_model_name(self, mock_which):
+        """Model names with shell metacharacters are rejected."""
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        settings = Settings()
+        settings.codex_cli_model = 'gpt-4" & dir'
+        backend = CodexCLIBackend(settings)
+        events = []
+        async for event in backend.run("test"):
+            events.append(event)
+
+        errors = [e for e in events if e.type == "error"]
+        assert len(errors) == 1
+        assert "Invalid model name" in errors[0].content
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_accepts_valid_model_names(self, mock_which):
+        """Standard model names pass validation."""
+        from pocketpaw.agents.codex_cli import _MODEL_NAME_RE
+
+        valid_names = [
+            "gpt-5.3-codex",
+            "gpt-4o",
+            "o3-mini",
+            "claude-3.5-sonnet",
+            "my_custom:latest",
+        ]
+        for name in valid_names:
+            assert _MODEL_NAME_RE.match(name), f"{name!r} should be valid"
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_rejects_invalid_model_names(self, mock_which):
+        """Model names with dangerous characters are rejected."""
+        from pocketpaw.agents.codex_cli import _MODEL_NAME_RE
+
+        invalid_names = [
+            'gpt-4" & dir',
+            "model; rm -rf /",
+            "model$(whoami)",
+            "model`id`",
+            "model name with spaces",
+        ]
+        for name in invalid_names:
+            assert not _MODEL_NAME_RE.match(name), f"{name!r} should be invalid"
+
+    @pytest.mark.asyncio
+    @patch("shutil.which", return_value="/usr/bin/codex")
+    async def test_broken_pipe_handling(self, mock_which):
+        """BrokenPipeError when Codex CLI crashes before reading stdin."""
+        from pocketpaw.agents.codex_cli import CodexCLIBackend
+
+        backend = CodexCLIBackend(Settings())
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdout = _AsyncLineIterator([])
+        mock_proc.stderr = AsyncMock()
+        mock_proc.stderr.read = AsyncMock(return_value=b"segfault")
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = MagicMock(side_effect=BrokenPipeError("broken"))
+        mock_stdin.drain = AsyncMock()
+        mock_stdin.close = MagicMock()
+        mock_stdin.wait_closed = AsyncMock()
+        mock_proc.stdin = mock_stdin
+
+        with patch(_SUBPROCESS_PATCH, return_value=mock_proc):
+            events = []
+            async for event in backend.run("test"):
+                events.append(event)
+
+        errors = [e for e in events if e.type == "error"]
+        assert len(errors) == 1
+        assert "exited before reading" in errors[0].content
+        assert "segfault" in errors[0].content
 
 
 class TestCodexCLIRegistry:
