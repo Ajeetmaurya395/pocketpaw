@@ -10,6 +10,7 @@
     Droplets,
     HardDrive,
   } from "@lucide/svelte";
+  import { onMount } from "svelte";
   import type { RecentFileEntry } from "$lib/api/types";
   import SidebarSection from "./SidebarSection.svelte";
   import { explorerStore, connectionStore, platformStore } from "$lib/stores";
@@ -20,7 +21,7 @@
   let defaultDirs = $derived(explorerStore.defaultDirs);
   let pinnedFolders = $derived(explorerStore.pinnedFolders);
 
-  $effect(() => {
+  onMount(() => {
     loadRecentFiles();
   });
 

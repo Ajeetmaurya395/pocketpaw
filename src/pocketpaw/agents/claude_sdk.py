@@ -513,7 +513,7 @@ class ClaudeSDKBackend:
                             "input_tokens": getattr(u, "input_tokens", 0),
                             "output_tokens": getattr(u, "output_tokens", 0),
                             "cached_input_tokens": getattr(u, "cache_read_input_tokens", 0)
-                            or getattr(u, "cache_creation_input_tokens", 0),
+                            + getattr(u, "cache_creation_input_tokens", 0),
                             "model": model,
                             "backend": "claude_agent_sdk",
                         },

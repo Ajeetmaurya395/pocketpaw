@@ -79,7 +79,13 @@ async def update_settings(request: Request):
 
             user_file = get_config_dir() / "identity" / "USER.md"
             user_file.parent.mkdir(parents=True, exist_ok=True)
-            display_name = settings_data["user_display_name"]
+            import re as _re
+
+            # Sanitize display name: strip newlines and limit to safe characters
+            raw_name = settings_data["user_display_name"]
+            display_name = _re.sub(r"[^\w\s\-.,'\u0080-\uffff]", "", raw_name).strip()[:100]
+            if not display_name:
+                display_name = "User"
             if user_file.exists():
                 content = user_file.read_text(encoding="utf-8")
                 import re

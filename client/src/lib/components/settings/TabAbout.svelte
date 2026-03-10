@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { VersionInfo } from "$lib/api";
   import { connectionStore, settingsStore } from "$lib/stores";
+  import { onMount } from "svelte";
   import {
     Info,
     ExternalLink,
@@ -10,8 +11,6 @@
     CheckCircle,
     AlertCircle,
   } from "@lucide/svelte";
-  import { check } from "@tauri-apps/plugin-updater";
-  import { relaunch } from "@tauri-apps/plugin-process";
 
   let version = $state<VersionInfo | null>(null);
   let loading = $state(true);
@@ -30,7 +29,7 @@
   let updateError = $state("");
   let downloadProgress = $state(0);
 
-  $effect(() => {
+  onMount(() => {
     loadVersion();
   });
 
@@ -51,6 +50,7 @@
     updateError = "";
 
     try {
+      const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
 
       if (update) {
@@ -71,6 +71,7 @@
     downloadProgress = 0;
 
     try {
+      const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
         updateStatus = "up-to-date";
@@ -101,6 +102,7 @@
   }
 
   async function restartApp() {
+    const { relaunch } = await import("@tauri-apps/plugin-process");
     await relaunch();
   }
 

@@ -2,6 +2,7 @@
   Updated: 2026-03-09 — Redesigned install/start UI with stepped progress,
   elapsed timer, always-visible log, and smarter state messages. -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { Loader2, Download, Play, AlertCircle, ExternalLink, Box, Sparkles, Layers, Terminal } from "@lucide/svelte";
   import { isTauri } from "$lib/auth";
 
@@ -25,6 +26,16 @@
   let elapsedTimer: ReturnType<typeof setInterval> | null = null;
   let installStep = $state<string>("Preparing...");
   let showLogs = $state(false);
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  onDestroy(() => {
+    stopTimer();
+    unlistenInstall?.();
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  });
 
   const profiles = [
     { id: "minimal" as const, label: "Minimal", desc: "Core agent only, no extras", icon: Box },
@@ -135,23 +146,27 @@
 
       // Poll check_backend_running every 1s for up to 30s
       let attempts = 0;
-      const poll = setInterval(async () => {
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(async () => {
         attempts++;
         try {
           const running = await invoke<boolean>("check_backend_running", { port: 8888 });
           if (running) {
-            clearInterval(poll);
+            clearInterval(pollInterval!);
+            pollInterval = null;
             stopTimer();
             onReady();
           } else if (attempts >= 30) {
-            clearInterval(poll);
+            clearInterval(pollInterval!);
+            pollInterval = null;
             stopTimer();
             error = "Backend did not start within 30 seconds. Try starting it manually: pocketpaw serve";
             currentState = "backend_stopped";
           }
         } catch {
           if (attempts >= 30) {
-            clearInterval(poll);
+            clearInterval(pollInterval!);
+            pollInterval = null;
             stopTimer();
             error = "Could not verify backend status.";
             currentState = "backend_stopped";
@@ -193,13 +208,12 @@
           {@const Icon = p.icon}
           <button
             onclick={() => (selectedProfile = p.id)}
-            class="flex items-center gap-3 rounded-xl border-2 p-3.5 text-left transition-all
-              {selectedProfile === p.id
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:border-primary/30'}"
+            class={selectedProfile === p.id
+              ? "flex items-center gap-3 rounded-xl border-2 border-primary bg-primary/5 p-3.5 text-left transition-all"
+              : "flex items-center gap-3 rounded-xl border-2 border-border p-3.5 text-left transition-all hover:border-primary/30"}
           >
-            <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg {selectedProfile === p.id ? 'bg-primary/15' : 'bg-muted'}">
-              <Icon class="h-4 w-4 {selectedProfile === p.id ? 'text-primary' : 'text-muted-foreground'}" />
+            <div class={selectedProfile === p.id ? "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/15" : "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted"}>
+              <Icon class={selectedProfile === p.id ? "h-4 w-4 text-primary" : "h-4 w-4 text-muted-foreground"} />
             </div>
             <div class="flex flex-col">
               <span class="text-sm font-medium text-foreground">{p.label}</span>

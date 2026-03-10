@@ -259,6 +259,11 @@ pub struct InstallProgress {
 /// Streams stdout line-by-line via "install-progress" events.
 #[tauri::command]
 pub async fn install_pocketpaw(app: AppHandle, profile: String) -> Result<bool, String> {
+    // Validate profile against allowlist to prevent command injection
+    if !["minimal", "recommended", "full"].contains(&profile.as_str()) {
+        return Err(format!("Invalid install profile: {}", profile));
+    }
+
     // Run the Python installer directly in non-interactive mode.
     // We avoid the wrapper scripts (install.ps1/install.sh) because they rely on
     // an interactive console ([Console]::OutputEncoding / Rich) which isn't

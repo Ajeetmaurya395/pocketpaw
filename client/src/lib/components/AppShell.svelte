@@ -40,14 +40,7 @@
     return () => document.removeEventListener("keydown", handleKeydown);
   });
 
-  let outerClass = $derived.by(() => {
-    let bg = platformStore.hasNativeBlur ? "bg-transparent" : "bg-background";
-    let base = `flex h-dvh w-screen flex-col overflow-hidden ${bg}`;
-    if (platformStore.hasWindowChrome) {
-      base += " rounded-lg";
-    }
-    return base;
-  });
+
 </script>
 
 <!-- Body: sidebar + main content -->

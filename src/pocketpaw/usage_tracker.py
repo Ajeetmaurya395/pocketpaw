@@ -51,16 +51,18 @@ def _estimate_cost(
     """Estimate USD cost. Returns None if model pricing is unknown."""
     pricing = _PRICING.get(model)
     if not pricing:
-        # Try prefix match (e.g. "gpt-4o-2024-11-20" -> "gpt-4o")
+        # Try prefix match in both directions:
+        # "gpt-4o-2024-11-20" starts with "gpt-4o" (dated variant -> base key)
+        # "claude-sonnet-4-6" is a prefix of "claude-sonnet-4-6-20250514" (alias -> dated key)
         for key, p in _PRICING.items():
-            if model.startswith(key):
+            if model.startswith(key) or key.startswith(model):
                 pricing = p
                 break
     if not pricing:
         return None
 
     cost = (
-        (input_tokens - cached_input_tokens) * pricing["input"]
+        max(0, input_tokens - cached_input_tokens) * pricing["input"]
         + output_tokens * pricing["output"]
         + cached_input_tokens * pricing.get("cached_input", pricing["input"])
     ) / 1_000_000
@@ -216,8 +218,9 @@ class UsageTracker:
     def clear(self) -> None:
         """Clear all usage records."""
         try:
-            if self._path.exists():
-                self._path.write_text("")
+            with self._lock:
+                if self._path.exists():
+                    self._path.write_text("")
         except Exception as e:
             logger.warning("Failed to clear usage records: %s", e)
 

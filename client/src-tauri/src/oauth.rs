@@ -118,10 +118,27 @@ pub fn start_oauth_server(app: AppHandle) -> Result<u16, String> {
     Ok(port)
 }
 
+/// Validate that a proxy URL targets localhost only (prevents SSRF).
+fn validate_proxy_url(url: &str) -> Result<(), String> {
+    // Only allow requests to 127.0.0.1 or localhost
+    let lower = url.to_lowercase();
+    if lower.starts_with("http://127.0.0.1") || lower.starts_with("http://localhost") {
+        Ok(())
+    } else {
+        Err(format!(
+            "Proxy only allows requests to localhost, got: {}",
+            url
+        ))
+    }
+}
+
 /// Proxy an HTTP POST to the backend, bypassing CORS/mixed-content restrictions
 /// in the Tauri webview. Returns the response body as a string.
+/// Only allows requests to localhost to prevent SSRF.
 #[tauri::command]
 pub fn proxy_post(url: String, body: String) -> Result<String, String> {
+    validate_proxy_url(&url)?;
+
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(Duration::from_secs(10)))
@@ -140,8 +157,11 @@ pub fn proxy_post(url: String, body: String) -> Result<String, String> {
 }
 
 /// Proxy an HTTP GET to the backend, bypassing CORS/mixed-content restrictions.
+/// Only allows requests to localhost to prevent SSRF.
 #[tauri::command]
 pub fn proxy_get(url: String) -> Result<String, String> {
+    validate_proxy_url(&url)?;
+
     let agent = ureq::Agent::new_with_config(
         ureq::config::Config::builder()
             .timeout_global(Some(Duration::from_secs(10)))

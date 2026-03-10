@@ -66,12 +66,11 @@
   <div class="mb-8 flex items-center gap-2">
     {#each Array(TOTAL_STEPS) as _, i}
       <div
-        class="h-1.5 rounded-full transition-all duration-300
-          {i + 1 === currentStep
-            ? 'w-6 bg-primary'
-            : i + 1 < currentStep
-              ? 'w-6 bg-primary/40'
-              : 'w-2 bg-muted'}"
+        class={i + 1 === currentStep
+          ? "h-1.5 w-6 rounded-full bg-primary transition-all duration-300"
+          : i + 1 < currentStep
+            ? "h-1.5 w-6 rounded-full bg-primary/40 transition-all duration-300"
+            : "h-1.5 w-2 rounded-full bg-muted transition-all duration-300"}
       ></div>
     {/each}
   </div>

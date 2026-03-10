@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import platform
 from datetime import UTC, datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+
+from pocketpaw.api.deps import require_scope
 
 router = APIRouter(tags=["Metrics"])
 
 
-@router.get("/metrics/system")
+@router.get("/metrics/system", dependencies=[Depends(require_scope("metrics", "admin"))])
 async def get_system_metrics():
     """Return system resource metrics (CPU, RAM, disk, uptime, battery)."""
     try:
@@ -29,7 +32,10 @@ async def get_system_metrics():
     cpu_freq = psutil.cpu_freq()
 
     mem = psutil.virtual_memory()
-    disk = psutil.disk_usage("/")
+    try:
+        disk = psutil.disk_usage(str(Path.home()))
+    except Exception:
+        disk = psutil.disk_usage("/")
 
     boot_time = datetime.fromtimestamp(psutil.boot_time(), tz=UTC)
     uptime = datetime.now(tz=UTC) - boot_time
@@ -72,7 +78,7 @@ async def get_system_metrics():
     }
 
 
-@router.get("/metrics/usage")
+@router.get("/metrics/usage", dependencies=[Depends(require_scope("metrics", "admin"))])
 async def get_usage_summary(since: str = Query("", description="ISO timestamp filter")):
     """Return aggregated token usage and cost summary."""
     from pocketpaw.usage_tracker import get_usage_tracker
@@ -81,7 +87,7 @@ async def get_usage_summary(since: str = Query("", description="ISO timestamp fi
     return tracker.get_summary(since=since if since else None)
 
 
-@router.get("/metrics/usage/recent")
+@router.get("/metrics/usage/recent", dependencies=[Depends(require_scope("metrics", "admin"))])
 async def get_recent_usage(limit: int = Query(50, ge=1, le=500)):
     """Return recent usage records."""
     from pocketpaw.usage_tracker import get_usage_tracker
@@ -104,7 +110,7 @@ async def get_recent_usage(limit: int = Query(50, ge=1, le=500)):
     ]
 
 
-@router.delete("/metrics/usage")
+@router.delete("/metrics/usage", dependencies=[Depends(require_scope("admin"))])
 async def clear_usage():
     """Clear all usage records."""
     from pocketpaw.usage_tracker import get_usage_tracker

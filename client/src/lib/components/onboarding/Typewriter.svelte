@@ -17,21 +17,25 @@
   let done = $state(false);
 
   onMount(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
     const timeout = setTimeout(() => {
       let i = 0;
-      const interval = setInterval(() => {
+      interval = setInterval(() => {
         if (i < text.length) {
           displayed += text[i];
           i++;
         } else {
-          clearInterval(interval);
+          clearInterval(interval!);
+          interval = null;
           done = true;
           onDone();
         }
       }, speed);
-      return () => clearInterval(interval);
     }, delay);
-    return () => clearTimeout(timeout);
+    return () => {
+      clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+    };
   });
 </script>
 
