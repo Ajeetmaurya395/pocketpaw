@@ -17,8 +17,14 @@ RUN pip install --no-cache-dir '.[discord,litellm]'
 # ---- Runtime stage ----
 FROM python:3.12-slim
 
-# Git for cloning/reading public repos
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# Git + Node.js (for Claude Code CLI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @anthropic-ai/claude-code \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
