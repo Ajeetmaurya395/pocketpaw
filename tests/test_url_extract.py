@@ -320,6 +320,7 @@ class TestUrlExtractTool:
             patch("httpx.AsyncClient") as mock_client_cls,
             patch.dict("sys.modules", {"html2text": mock_html2text}),
         ):
+
             async def mock_client_get(url):
                 return await mock_get("GET", url, None)
 
@@ -380,9 +381,7 @@ class TestUrlExtractTool:
             patch.dict("sys.modules", {"html2text": mock_html2text}),
         ):
             mock_client = MagicMock()
-            mock_client.get = AsyncMock(
-                side_effect=AssertionError("network should not be called")
-            )
+            mock_client.get = AsyncMock(side_effect=AssertionError("network should not be called"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
@@ -411,9 +410,7 @@ class TestUrlExtractTool:
             patch.dict("sys.modules", {"html2text": mock_html2text}),
         ):
             mock_client = MagicMock()
-            mock_client.get = AsyncMock(
-                side_effect=AssertionError("network should not be called")
-            )
+            mock_client.get = AsyncMock(side_effect=AssertionError("network should not be called"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_client_cls.return_value = mock_client
