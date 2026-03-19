@@ -372,6 +372,13 @@ async def websocket_handler(
                         val = data["copilot_sdk_max_turns"]
                         if isinstance(val, int | float) and 1 <= val <= 200:
                             settings.copilot_sdk_max_turns = int(val)
+                    # Deep Agents
+                    if "deep_agents_model" in data:
+                        settings.deep_agents_model = data["deep_agents_model"]
+                    if "deep_agents_max_turns" in data:
+                        val = data["deep_agents_max_turns"]
+                        if isinstance(val, int | float) and 1 <= val <= 200:
+                            settings.deep_agents_max_turns = int(val)
                     # OpenCode
                     if "opencode_base_url" in data:
                         settings.opencode_base_url = data["opencode_base_url"]
