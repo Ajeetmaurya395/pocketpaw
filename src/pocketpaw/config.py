@@ -195,6 +195,11 @@ class Settings(BaseSettings):
             "All backends support 'litellm' as a provider for open-source model access."
         ),
     )
+    # backend fallback chain
+    fallback_backends: list[str] = Field(
+        default_factory=list,
+        description=("Ordered list of fallback backends to try if the primary backend fails"),
+    )
 
     # Claude Agent SDK Settings
     claude_sdk_provider: str = Field(
