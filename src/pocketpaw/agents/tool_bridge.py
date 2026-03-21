@@ -145,6 +145,23 @@ def build_openai_function_tools(settings: Any, backend: str = "openai_agents") -
     return function_tools
 
 
+def _scan_tool_output(result: str, tool_name: str) -> str:
+    """Scan tool output for injection attacks, return sanitized content if needed."""
+    try:
+        from pocketpaw.config import get_settings
+        from pocketpaw.security.injection_scanner import get_injection_scanner
+
+        settings = get_settings()
+        if settings.injection_scan_enabled and result:
+            scanner = get_injection_scanner()
+            scan = scanner.scan(result, source=f"tool:{tool_name}")
+            if scan.threat_level.value != "none":
+                return scan.sanitized_content
+    except Exception:
+        pass  # Don't let scanner errors break tool execution
+    return result
+
+
 def _make_invoke_callback(tool: Any):
     """Create an async callback for a single tool (avoids closure-capture bugs)."""
 
@@ -158,7 +175,8 @@ def _make_invoke_callback(tool: Any):
             return f"Error: arguments must be a JSON object, got {type(params).__name__}"
 
         try:
-            return await tool.execute(**params)
+            result = await tool.execute(**params)
+            return _scan_tool_output(result, tool.name)
         except Exception as exc:
             logger.error("Tool %s execution error: %s", tool.name, exc)
             return f"Error executing {tool.name}: {exc}"
@@ -228,7 +246,8 @@ def _make_adk_wrapper(tool: Any):
 
     async def _adk_tool_wrapper(**kwargs: str) -> str:
         try:
-            return await tool.execute(**kwargs)
+            result = await tool.execute(**kwargs)
+            return _scan_tool_output(result, tool.name)
         except Exception as exc:
             logger.error("ADK tool %s execution error: %s", tool.name, exc)
             return f"Error executing {tool.name}: {exc}"
@@ -309,7 +328,8 @@ def _make_langchain_wrapper(tool: Any):
 
     async def _run(**kwargs: str) -> str:
         try:
-            return await tool.execute(**kwargs)
+            result = await tool.execute(**kwargs)
+            return _scan_tool_output(result, tool.name)
         except Exception as exc:
             logger.error("LangChain tool %s execution error: %s", tool.name, exc)
             return f"Error executing {tool.name}: {exc}"

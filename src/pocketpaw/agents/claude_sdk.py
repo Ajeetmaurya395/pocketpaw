@@ -197,12 +197,23 @@ class ClaudeSDKBackend:
     def _is_dangerous_command(self, command: str) -> str | None:
         """Check if a command matches dangerous patterns.
 
+        Uses both regex patterns (for complex matching) and substring
+        patterns (for literal matches).
+
         Args:
             command: Command string to check
 
         Returns:
             The matched pattern if dangerous, None otherwise
         """
+        # Primary: regex matching (catches obfuscation, spacing tricks)
+        from pocketpaw.security.rails import COMPILED_DANGEROUS_PATTERNS
+
+        for pattern in COMPILED_DANGEROUS_PATTERNS:
+            if pattern.search(command):
+                return pattern.pattern
+
+        # Secondary: substring matching (catches simple literal fragments)
         command_lower = command.lower()
         for pattern in DANGEROUS_PATTERNS:
             if pattern.lower() in command_lower:
@@ -286,6 +297,27 @@ class ClaudeSDKBackend:
             if matched:
                 logger.warning(f"🛑 BLOCKED dangerous command: {command[:100]}")
                 logger.warning(f"   └─ Matched pattern: {matched}")
+                # Audit log the blocked command
+                try:
+                    from pocketpaw.security.audit import (
+                        AuditEvent,
+                        AuditSeverity,
+                        get_audit_logger,
+                    )
+
+                    get_audit_logger().log(
+                        AuditEvent.create(
+                            severity=AuditSeverity.ALERT,
+                            actor="agent",
+                            action="dangerous_command_blocked",
+                            target="bash",
+                            status="block",
+                            command=command[:500],
+                            matched_pattern=matched,
+                        )
+                    )
+                except Exception:
+                    pass  # Don't let audit failure break the hook
                 return {
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
