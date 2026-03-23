@@ -4,12 +4,16 @@ Provides:
 - _instantiate_all_tools(backend): discover and instantiate builtin tools, filtered by backend
 - build_openai_function_tools(): wrap tools as OpenAI Agents SDK FunctionTool objects
 - build_adk_function_tools(): wrap tools as Google ADK FunctionTool objects
+- build_deep_agents_tools(): wrap tools as LangChain StructuredTool objects for Deep Agents
 - get_tool_instructions_compact(): compact markdown for system-prompt injection
 
 Backend-aware exclusion:
-- claude_agent_sdk: shell/fs tools excluded (provided natively by CLI)
-- All other backends: shell/fs tools included via the bridge
+- claude_agent_sdk: shell/fs/edit tools excluded (provided natively by CLI)
+- All other backends: shell/fs/edit tools included via the bridge
 - BrowserTool/DesktopTool: always excluded (need special session state)
+
+Changes:
+- 2026-03-12: Added EditFileTool to _CLAUDE_SDK_EXCLUDED (has native Edit)
 """
 
 from __future__ import annotations
@@ -28,7 +32,15 @@ logger = logging.getLogger(__name__)
 _ALWAYS_EXCLUDED = frozenset({"BrowserTool", "DesktopTool"})
 
 # Tools excluded only for claude_agent_sdk -- these are provided natively by the CLI.
-_CLAUDE_SDK_EXCLUDED = frozenset({"ShellTool", "ReadFileTool", "WriteFileTool", "ListDirTool"})
+_CLAUDE_SDK_EXCLUDED = frozenset(
+    {
+        "ShellTool",
+        "ReadFileTool",
+        "WriteFileTool",
+        "ListDirTool",
+        "EditFileTool",
+    }
+)
 
 
 def _instantiate_all_tools(backend: str = "claude_agent_sdk") -> list[BaseTool]:
@@ -60,6 +72,19 @@ def _instantiate_all_tools(backend: str = "claude_agent_sdk") -> list[BaseTool]:
             tools.append(cls())
         except Exception as exc:
             logger.debug("Skipping tool %s: %s", class_name, exc)
+
+    # Inject soul tools if soul is active — and exclude regular memory tools
+    # to avoid overlap (soul_remember/soul_recall supersede remember/recall/forget).
+    try:
+        from pocketpaw.soul.manager import get_soul_manager
+
+        soul_mgr = get_soul_manager()
+        if soul_mgr is not None:
+            tools = [t for t in tools if t.name not in ("remember", "recall", "forget")]
+            tools.extend(soul_mgr.get_tools())
+    except Exception:
+        pass  # Soul not available
+
     return tools
 
 
@@ -100,16 +125,43 @@ def build_openai_function_tools(settings: Any, backend: str = "openai_agents") -
             continue
 
         defn = tool.definition
+
+        # Sanitize JSON schema: strict providers (e.g. Groq) reject schemas
+        # where 'required' is present but 'properties' is empty or missing.
+        params_schema = dict(defn.parameters) if defn.parameters else {"type": "object"}
+        props = params_schema.get("properties")
+        if not props and "required" in params_schema:
+            params_schema.pop("required")
+        if not props and "properties" in params_schema:
+            params_schema.pop("properties")
+
         ft = FunctionTool(
             name=defn.name,
             description=defn.description,
-            params_json_schema=defn.parameters,
+            params_json_schema=params_schema,
             on_invoke_tool=_make_invoke_callback(tool),
         )
         function_tools.append(ft)
 
     logger.info("Built %d OpenAI FunctionTools from PocketPaw tools", len(function_tools))
     return function_tools
+
+
+def _scan_tool_output(result: str, tool_name: str) -> str:
+    """Scan tool output for injection attacks, return sanitized content if needed."""
+    try:
+        from pocketpaw.config import get_settings
+        from pocketpaw.security.injection_scanner import get_injection_scanner
+
+        settings = get_settings()
+        if settings.injection_scan_enabled and result:
+            scanner = get_injection_scanner()
+            scan = scanner.scan(result, source=f"tool:{tool_name}")
+            if scan.threat_level.value != "none":
+                return scan.sanitized_content
+    except Exception:
+        pass  # Don't let scanner errors break tool execution
+    return result
 
 
 def _make_invoke_callback(tool: Any):
@@ -125,7 +177,8 @@ def _make_invoke_callback(tool: Any):
             return f"Error: arguments must be a JSON object, got {type(params).__name__}"
 
         try:
-            return await tool.execute(**params)
+            result = await tool.execute(**params)
+            return _scan_tool_output(result, tool.name)
         except Exception as exc:
             logger.error("Tool %s execution error: %s", tool.name, exc)
             return f"Error executing {tool.name}: {exc}"
@@ -195,7 +248,8 @@ def _make_adk_wrapper(tool: Any):
 
     async def _adk_tool_wrapper(**kwargs: str) -> str:
         try:
-            return await tool.execute(**kwargs)
+            result = await tool.execute(**kwargs)
+            return _scan_tool_output(result, tool.name)
         except Exception as exc:
             logger.error("ADK tool %s execution error: %s", tool.name, exc)
             return f"Error executing {tool.name}: {exc}"
@@ -219,6 +273,91 @@ def _make_adk_wrapper(tool: Any):
     _adk_tool_wrapper.__annotations__["return"] = str
 
     return _adk_tool_wrapper
+
+
+def build_deep_agents_tools(settings: Any, backend: str = "deep_agents") -> list:
+    """Build a list of LangChain ``StructuredTool`` wrappers for PocketPaw tools.
+
+    Deep Agents accepts LangChain tools, plain callables, or dicts. We use
+    StructuredTool for the richest schema support.
+
+    Only tools permitted by the active ToolPolicy are included.
+
+    Args:
+        settings: A ``Settings`` instance used to build the ToolPolicy.
+
+    Returns:
+        List of ``langchain_core.tools.StructuredTool`` objects (empty if not installed).
+    """
+    try:
+        from langchain_core.tools import StructuredTool  # noqa: F401
+    except ImportError:
+        logger.debug("langchain-core not installed — returning empty tools list")
+        return []
+
+    policy = ToolPolicy(
+        profile=settings.tool_profile,
+        allow=settings.tools_allow,
+        deny=settings.tools_deny,
+    )
+
+    registry = ToolRegistry(policy=policy)
+    for tool in _instantiate_all_tools(backend=backend):
+        registry.register(tool)
+
+    structured_tools: list = []
+    for tool_name in registry.allowed_tool_names:
+        tool = registry.get(tool_name)
+        if tool is None:
+            continue
+
+        wrapper = _make_langchain_wrapper(tool)
+        structured_tools.append(wrapper)
+
+    logger.info("Built %d LangChain StructuredTools from PocketPaw tools", len(structured_tools))
+    return structured_tools
+
+
+def _make_langchain_wrapper(tool: Any):
+    """Create a LangChain StructuredTool wrapper for a PocketPaw tool."""
+    import inspect
+
+    from langchain_core.tools import StructuredTool
+
+    defn = tool.definition
+    props = (defn.parameters or {}).get("properties", {})
+    param_names = list(props.keys())
+
+    async def _run(**kwargs: str) -> str:
+        try:
+            result = await tool.execute(**kwargs)
+            return _scan_tool_output(result, tool.name)
+        except Exception as exc:
+            logger.error("LangChain tool %s execution error: %s", tool.name, exc)
+            return f"Error executing {tool.name}: {exc}"
+
+    # Set function metadata so LangChain can introspect it
+    _run.__name__ = defn.name
+    _run.__qualname__ = defn.name
+    _run.__doc__ = defn.description
+
+    # Build proper signature with string-typed parameters
+    sig_params = [
+        inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=str)
+        for name in param_names
+    ]
+    _run.__signature__ = inspect.Signature(
+        parameters=sig_params,
+        return_annotation=str,
+    )
+    _run.__annotations__ = {name: str for name in param_names}
+    _run.__annotations__["return"] = str
+
+    return StructuredTool.from_function(
+        coroutine=_run,
+        name=defn.name,
+        description=defn.description,
+    )
 
 
 def get_tool_instructions_compact(settings: Any, backend: str = "opencode") -> str:

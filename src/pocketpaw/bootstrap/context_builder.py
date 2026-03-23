@@ -47,6 +47,7 @@ class AgentContextBuilder:
         session_key: str | None = None,
         file_context: dict | None = None,
         agents_md_dir: str | None = None,
+        metadata: dict | None = None,
     ) -> str:
         """Build the complete system prompt.
 
@@ -77,7 +78,14 @@ class AgentContextBuilder:
         parts = [base_prompt]
 
         # 2. Inject memory context (scoped to sender)
-        if include_memory and memory_context:
+        # When soul is active, soul's bootstrap provider already handles persistent
+        # memory (identity, personality, knowledge domains). Skip regular long-term
+        # memory injection to avoid duplication — the agent should use soul_recall
+        # for fact retrieval instead. Session history is still managed by regular memory.
+        from pocketpaw.paw.soul_bridge import SoulBootstrapProvider
+
+        soul_active = isinstance(self.bootstrap, SoulBootstrapProvider)
+        if include_memory and memory_context and not soul_active:
             parts.append(
                 "\n# Memory Context (already loaded — use this directly, "
                 "do NOT call recall unless you need something not listed here)\n" + memory_context
@@ -109,6 +117,25 @@ class AgentContextBuilder:
             hint = CHANNEL_FORMAT_HINTS.get(channel, "")
             if hint:
                 parts.append(f"\n# Response Format\n{hint}")
+
+        # 4b. Inject channel-specific instructions (e.g. discord.md)
+        if channel:
+            channel_instructions = self._load_channel_instructions(channel)
+            if channel_instructions:
+                # Inject dynamic context (username, guild_id) from metadata
+                meta = metadata or {}
+                username = meta.get("username", "")
+                guild_id = meta.get("guild_id", "")
+                ctx_lines = []
+                if sender_id:
+                    ctx_lines.append(f"sender_id: {sender_id}")
+                if username:
+                    ctx_lines.append(f"discord_username: {username}")
+                if guild_id:
+                    ctx_lines.append(f"discord_guild_id: {guild_id}")
+                if ctx_lines:
+                    channel_instructions += "\n\n## Current Context\n" + "\n".join(ctx_lines)
+                parts.append(channel_instructions)
 
         # 5. Inject session key for session management tools
         if session_key:
@@ -148,7 +175,29 @@ class AgentContextBuilder:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Health engine failure (non-fatal, skipping health block): %s", exc)
 
-        # 8. Inject AGENTS.md constraints from the target repo
+        # 8. Inject available skills so the agent knows what exists
+        try:
+            from pocketpaw.skills import get_skill_loader
+
+            loader = get_skill_loader()
+            skills = loader.get_all()
+            if skills:
+                skill_lines = []
+                for s in skills.values():
+                    invocable = " (user-invocable)" if s.user_invocable else ""
+                    skill_lines.append(f"- **{s.name}**: {s.description}{invocable}")
+                search_dirs = ", ".join(str(p) for p in loader.paths)
+                parts.append(
+                    "\n# Available Skills\n"
+                    "The following skills have been created and are available. "
+                    "Do NOT recreate them or forget they exist.\n"
+                    + "\n".join(skill_lines)
+                    + f"\n\nSkills directories: {search_dirs}"
+                )
+        except Exception as exc:
+            logger.debug("Skill injection skipped: %s", exc)
+
+        # 9. Inject AGENTS.md constraints from the target repo
         if agents_md_dir:
             try:
                 from pocketpaw.agents_md import AgentsMdLoader
@@ -160,3 +209,22 @@ class AgentContextBuilder:
                 pass  # AGENTS.md failure never breaks prompt building
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _load_channel_instructions(channel: Channel) -> str:
+        """Load channel-specific instruction file (e.g. discord.md)."""
+        from pathlib import Path
+
+        _channel_files = {
+            Channel.DISCORD: "discord.md",
+        }
+        filename = _channel_files.get(channel)
+        if not filename:
+            return ""
+        path = Path(__file__).parent / filename
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except Exception:
+            return ""
