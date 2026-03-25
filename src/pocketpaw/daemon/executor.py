@@ -4,9 +4,12 @@ IntentionExecutor - Executes intentions by invoking the agent.
 When an intention triggers:
 1. Gather context from configured sources
 2. Apply context to prompt template
+   (+ inject {{session.*}} variables when fired by a stale-session trigger)
 3. Invoke AgentRouter with the prepared prompt
 4. Stream results to callback (WebSocket/Telegram)
 """
+
+from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -71,12 +74,18 @@ class IntentionExecutor:
         """
         self.stream_callback = callback
 
-    async def execute(self, intention: dict) -> AsyncIterator[dict]:
+    async def execute(
+        self, intention: dict, session_meta: dict | None = None
+    ) -> AsyncIterator[dict]:
         """
         Execute an intention and yield result chunks.
 
         Args:
             intention: Intention dict to execute
+            session_meta: Optional stale-session metadata injected by the stale
+                          trigger (keys: session_key, title, idle_hours, preview).
+                          When provided, ``{{session.title}}``, ``{{session.idle_hours}}``,
+                          and ``{{session.preview}}`` are replaced in the prompt.
 
         Yields:
             Chunks from the agent execution
@@ -106,6 +115,16 @@ class IntentionExecutor:
             # 2. Prepare prompt
             raw_prompt = intention.get("prompt", "")
             prepared_prompt = self.context_hub.apply_template(raw_prompt, context)
+
+            # Inject stale-session variables when available
+            if session_meta:
+                prepared_prompt = (
+                    prepared_prompt.replace(
+                        "{{session.title}}", session_meta.get("title", "this session")
+                    )
+                    .replace("{{session.idle_hours}}", str(session_meta.get("idle_hours", "")))
+                    .replace("{{session.preview}}", session_meta.get("preview", ""))
+                )
 
             logger.debug(f"Prepared prompt: {prepared_prompt[:100]}...")
 
@@ -137,17 +156,18 @@ class IntentionExecutor:
                 "timestamp": datetime.now(tz=UTC).isoformat(),
             }
 
-    async def execute_and_stream(self, intention: dict) -> None:
+    async def execute_and_stream(self, intention: dict, session_meta: dict | None = None) -> None:
         """
         Execute an intention and stream results to callback.
 
         Args:
             intention: Intention dict to execute
+            session_meta: Optional stale-session metadata (see :meth:`execute`).
         """
         if not self.stream_callback:
             logger.warning("No stream callback set, results will be discarded")
 
-        async for chunk in self.execute(intention):
+        async for chunk in self.execute(intention, session_meta=session_meta):
             if self.stream_callback:
                 try:
                     await self.stream_callback(intention["id"], chunk)
