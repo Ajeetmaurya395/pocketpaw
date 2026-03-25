@@ -213,7 +213,11 @@ window.PocketPaw.Transparency = {
                             ? "Requires networkx. Install with: pip install 'pocketpaw[graph]'"
                             : '';
 
-                        container.innerHTML = graphUnavailable ? '' : svg;
+                        if (graphUnavailable) {
+                            container.innerHTML = '';
+                        } else {
+                            this.safeInsertGraphSvg(container, svg);
+                        }
                         // Also load JSON for entity/relationship list
                         this.loadMemoryGraphData();
                     })
@@ -223,6 +227,36 @@ window.PocketPaw.Transparency = {
                         this.memoryGraphUnavailableText = '';
                         container.innerHTML = '<div style="padding: 20px; color: rgba(255,255,255,0.5);">Failed to load graph</div>';
                     });
+            },
+
+            safeInsertGraphSvg(container, svgText) {
+                const parser = new DOMParser();
+                const parsed = parser.parseFromString(svgText, 'image/svg+xml');
+                const svgEl = parsed.documentElement;
+
+                if (!svgEl || svgEl.nodeName.toLowerCase() !== 'svg') {
+                    throw new Error('Invalid SVG payload');
+                }
+
+                svgEl.querySelectorAll('script, foreignObject').forEach(node => node.remove());
+
+                svgEl.querySelectorAll('*').forEach(node => {
+                    Array.from(node.attributes || []).forEach(attr => {
+                        const name = (attr.name || '').toLowerCase();
+                        const value = (attr.value || '').trim().toLowerCase();
+
+                        if (name.startsWith('on')) {
+                            node.removeAttribute(attr.name);
+                            return;
+                        }
+
+                        if ((name === 'href' || name === 'xlink:href') && value.startsWith('javascript:')) {
+                            node.removeAttribute(attr.name);
+                        }
+                    });
+                });
+
+                container.replaceChildren(svgEl);
             },
 
             loadMemoryGraphData() {
@@ -345,6 +379,11 @@ window.PocketPaw.Transparency = {
              * Delete a long-term memory
              */
             deleteMemory(id) {
+                const confirmed = confirm(
+                    'Delete this memory permanently? This action cannot be undone.'
+                );
+                if (!confirmed) return;
+
                 fetch(`/api/memory/long_term/${encodeURIComponent(id)}`, { method: 'DELETE' })
                     .then(r => {
                         if (!r.ok) throw new Error('Delete failed');
@@ -402,6 +441,11 @@ window.PocketPaw.Transparency = {
 
             pruneMemories() {
                 const days = Math.max(1, parseInt(this.memoryPruneDays, 10) || 30);
+                const confirmed = confirm(
+                    `Prune memories older than ${days} days? This permanently deletes data and cannot be undone.`
+                );
+                if (!confirmed) return;
+
                 fetch('/api/memory/prune', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
