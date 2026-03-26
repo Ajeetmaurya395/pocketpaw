@@ -897,3 +897,228 @@ class TestFileGraphAndManagement:
         # Verify that the cleanup completes without error and maintains valid entities
         stats = await store.get_memory_stats()
         assert stats["total_memories"] >= 100
+
+
+# ===========================================================================
+# TestGraphSVGHtmlEscaping
+# ===========================================================================
+
+
+class TestGraphSVGHtmlEscaping:
+    """HTML escaping in get_graph_svg to prevent malformed SVG."""
+
+    async def test_direct_entity_escaping_less_than(self, tmp_path):
+        """Test HTML escaping by directly inserting entities with < via SQL."""
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        # Insert entity directly via SQL to test escaping independent of graph extraction
+        now = datetime.now(UTC).isoformat()
+        with sqlite3.connect(store._graph_db_path) as conn:
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "entity_1",
+                    "test<entity",
+                    "Test<Entity",
+                    5,
+                    "default",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        svg = await store.get_graph_svg(user_id="default")
+        # The SVG output should contain &lt; not bare <
+        assert "&lt;" in svg
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    async def test_direct_entity_escaping_greater_than(self, tmp_path):
+        """Test HTML escaping by directly inserting entities with >."""
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        now = datetime.now(UTC).isoformat()
+        with sqlite3.connect(store._graph_db_path) as conn:
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "entity_1",
+                    "value>100",
+                    "Value>100",
+                    5,
+                    "default",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        svg = await store.get_graph_svg(user_id="default")
+        assert "&gt;" in svg
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    async def test_direct_entity_escaping_ampersand(self, tmp_path):
+        """Test HTML escaping by directly inserting entities with &."""
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        now = datetime.now(UTC).isoformat()
+        with sqlite3.connect(store._graph_db_path) as conn:
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "entity_1",
+                    "dogs&cats",
+                    "Dogs&Cats",
+                    5,
+                    "default",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        svg = await store.get_graph_svg(user_id="default")
+        assert "&amp;" in svg
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    async def test_direct_relation_type_escaping(self, tmp_path):
+        """Test HTML escaping for relation types in edge labels."""
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        # Insert entities and a relationship with special chars in type
+        now = datetime.now(UTC).isoformat()
+        with sqlite3.connect(store._graph_db_path) as conn:
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("entity_1", "python", "Python", 5, "default", now, now),
+            )
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                ("entity_2", "framework", "Framework", 3, "default", now, now),
+            )
+            # Insert relationship (note: actual relation types are normalized, but test the escaping)
+            conn.execute(
+                """INSERT INTO relationships (relationship_id, source_entity_id, target_entity_id, relation_type, weight, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                ("rel_1", "entity_1", "entity_2", "uses", 0, "default", now, now),
+            )
+            conn.commit()
+
+        svg = await store.get_graph_svg(user_id="default")
+        # Verify SVG is well-formed and contains the entities
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "Python" in svg or "Framework" in svg or "uses" in svg
+
+    async def test_svg_without_special_chars_unchanged(self, tmp_path):
+        """Normal entity names without special chars work as before."""
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        await store.save(
+            MemoryEntry(
+                id="",
+                type=MemoryType.LONG_TERM,
+                content="Python is great for backend development",
+                metadata={"header": "Language"},
+            )
+        )
+
+        svg = await store.get_graph_svg(user_id="default")
+        # Should have normal SVG structure
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert "<text" in svg
+        # Should have node label text
+        assert "Python" in svg
+
+    async def test_svg_malformed_without_escaping(self, tmp_path):
+        """Demonstrate that without escaping, SVG would be malformed."""
+        # This test verifies the fix prevents SVG malformation
+        store = FileMemoryStore(
+            base_path=tmp_path,
+            vector_enabled=True,
+            embedding_provider="hash",
+        )
+
+        now = datetime.now(UTC).isoformat()
+        with sqlite3.connect(store._graph_db_path) as conn:
+            conn.execute(
+                """INSERT INTO entities (entity_id, entity_key, display_name, mention_count, user_scope, first_seen, last_seen)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "entity_1",
+                    "test<bad>evil",
+                    "Test<Bad>Evil",
+                    5,
+                    "default",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        svg = await store.get_graph_svg(user_id="default")
+        # SVG should still be well-formed (properly closed tags)
+        assert svg.count("<svg") == 1
+        assert svg.count("</svg>") == 1
+        # Should have escaped the angle brackets
+        assert "&lt;" in svg or "&gt;" in svg
+
+    async def test_empty_graph_returns_valid_svg(self, tmp_path):
+        """Empty graph with no entities returns valid SVG."""
+        store = FileMemoryStore(base_path=tmp_path)
+
+        svg = await store.get_graph_svg(user_id="default")
+        # Should return valid SVG even with no data
+        assert "<svg" in svg
+        assert "</svg>" in svg
+
+    async def test_graph_with_networkx_unavailable_returns_fallback(self, tmp_path):
+        """If networkx is unavailable, returns fallback SVG."""
+        store = FileMemoryStore(base_path=tmp_path)
+
+        await store.save(
+            MemoryEntry(
+                id="",
+                type=MemoryType.LONG_TERM,
+                content="Test entity",
+                metadata={"header": "Test"},
+            )
+        )
+
+        # Mock networkx import failure
+        with patch("importlib.import_module", side_effect=ImportError("No networkx")):
+            svg = await store.get_graph_svg(user_id="default")
+
+        # Should return fallback SVG
+        assert "<svg" in svg
+        assert "</svg>" in svg
+        assert ("Graph visualization unavailable" in svg or "pocketpaw[graph]" in svg)

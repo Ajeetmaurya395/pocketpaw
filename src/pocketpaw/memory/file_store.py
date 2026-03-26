@@ -11,6 +11,7 @@
 
 import asyncio
 import hashlib
+import html
 import importlib
 import json
 import logging
@@ -2117,7 +2118,7 @@ class FileMemoryStore:
                 text_style = (
                     f'<text x="{mid_x:.1f}" y="{mid_y:.1f}" font-size="9" '
                     f'fill="rgba(255,255,255,0.5)" text-anchor="middle" '
-                    f'pointer-events="none">{rel_label}</text>'
+                    f'pointer-events="none">{html.escape(rel_label)}</text>'
                 )
                 svg_parts.append(text_style)
 
@@ -2136,7 +2137,7 @@ class FileMemoryStore:
                 svg_parts.append(
                     f'<text x="{x:.1f}" y="{y:.1f}" font-size="11" font-family="system-ui" '
                     f'fill="rgba(255,255,255,0.9)" text-anchor="middle" dominant-baseline="middle" '
-                    f'pointer-events="none">{label[:12]}</text>'
+                    f'pointer-events="none">{html.escape(label[:12])}</text>'
                 )
 
             svg_parts.append("</svg>")
