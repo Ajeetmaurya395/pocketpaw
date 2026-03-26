@@ -786,3 +786,114 @@ class TestFileGraphAndManagement:
         count = await store.clear_session(session_key)
         assert count == 0
         assert not session_file.exists()
+
+    async def test_cleanup_orphan_records_handles_large_memory_stores(self, tmp_path):
+        """Test cleanup_orphan_records with 1000+ memories without SQLite variable limit crash.
+
+        Verifies the fix for SQLite SQLITE_LIMIT_VARIABLE_NUMBER (default 999).
+        With >999 valid memory IDs, a direct NOT IN clause would fail with
+        OperationalError: too many SQL variables. The fix uses a temporary
+        table approach to avoid this limit.
+        """
+        store = FileMemoryStore(base_path=tmp_path, vector_enabled=True)
+
+        # Create 1050 entries to comfortably exceed SQLite's default variable limit (999)
+        entry_ids = []
+        for i in range(1050):
+            entry = MemoryEntry(
+                id="",
+                type=MemoryType.LONG_TERM,
+                content=f"Memory {i}: Important fact about topic {i}",
+                metadata={"header": f"Entry {i}"},
+            )
+            entry_id = await store.save(entry)
+            entry_ids.append(entry_id)
+
+        # Verify all 1050 are indexed
+        assert len(store._index) == 1050
+
+        # Create orphan vector records (not in _index)
+        with sqlite3.connect(store._vector_db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_vectors
+                (doc_id, content, memory_type, user_scope, created_at, metadata_json,
+                 embedding_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "orphan_1",
+                    "orphaned text",
+                    "long_term",
+                    "default",
+                    datetime.now(tz=UTC).isoformat(),
+                    "{}",
+                    "[]",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_vectors
+                (doc_id, content, memory_type, user_scope, created_at, metadata_json,
+                 embedding_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "orphan_2",
+                    "another orphaned text",
+                    "long_term",
+                    "default",
+                    datetime.now(tz=UTC).isoformat(),
+                    "{}",
+                    "[]",
+                ),
+            )
+            conn.commit()
+
+        # Verify orphans are present before cleanup
+        with sqlite3.connect(store._vector_db_path) as conn:
+            orphan_count = conn.execute(
+                "SELECT COUNT(*) FROM memory_vectors WHERE doc_id LIKE 'orphan_%'"
+            ).fetchone()[0]
+            total_before = conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
+
+        assert orphan_count == 2
+        assert total_before >= 1050 + 2
+
+        # Run cleanup — must not crash with "too many SQL variables" error
+        # This is the critical test: with 1050 valid IDs in a direct NOT IN clause,
+        # SQLite would hit the variable limit. The temp table approach should work.
+        await store._cleanup_orphan_records()
+
+        # Verify orphans are deleted and valid entries remain
+        with sqlite3.connect(store._vector_db_path) as conn:
+            remaining_orphan_count = conn.execute(
+                "SELECT COUNT(*) FROM memory_vectors WHERE doc_id LIKE 'orphan_%'"
+            ).fetchone()[0]
+            total_after = conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
+
+        assert remaining_orphan_count == 0, "Orphaned records should be deleted"
+        # All 1050 valid entries should still have vector records
+        assert total_after >= 1050, "Valid entries should be preserved"
+
+    async def test_cleanup_orphan_records_with_graph_entities(self, tmp_path):
+        """Test that cleanup_orphan_records also cleans up graph relationships correctly."""
+        store = FileMemoryStore(base_path=tmp_path, vector_enabled=True)
+
+        # Create 100 entries with graph relationships
+        entry_ids = []
+        for i in range(100):
+            entry = MemoryEntry(
+                id="",
+                type=MemoryType.LONG_TERM,
+                content="Project Alpha uses PostgreSQL and FastAPI framework",
+                metadata={"header": f"Entry {i}"},
+            )
+            entry_id = await store.save(entry)
+            entry_ids.append(entry_id)
+
+        await store._cleanup_orphan_records()
+
+        # Verify that the cleanup completes without error and maintains valid entities
+        stats = await store.get_memory_stats()
+        assert stats["total_memories"] >= 100

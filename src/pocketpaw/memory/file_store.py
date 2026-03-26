@@ -2210,18 +2210,26 @@ class FileMemoryStore:
         }
 
     async def _cleanup_orphan_records(self) -> None:
-        """Remove vector/graph rows that no longer map to in-memory entries."""
-        valid_ids = set(self._index.keys())
+        """Remove vector/graph rows that no longer map to in-memory entries.
+
+        Uses a temporary table approach to avoid SQLite's SQLITE_LIMIT_VARIABLE_NUMBER
+        (default 999). With 1000+ valid IDs, a direct NOT IN clause would fail.
+        Instead, we create a temp table, populate it in batches, then delete orphans
+        in a single operation using a subquery.
+        """
+        valid_ids = list(self._index.keys())
 
         def _cleanup_vector_sync() -> None:
             if not self._vector_db_path.exists():
                 return
             with sqlite3.connect(self._vector_db_path) as conn:
                 if valid_ids:
-                    placeholders = ",".join("?" for _ in valid_ids)
+                    # Use temp table to avoid SQLite variable limit (default 999)
+                    conn.execute("CREATE TEMP TABLE valid_doc_ids (doc_id TEXT PRIMARY KEY)")
+                    self._insert_valid_ids_batched(conn, "valid_doc_ids", valid_ids)
                     conn.execute(
-                        f"DELETE FROM memory_vectors WHERE doc_id NOT IN ({placeholders})",
-                        tuple(valid_ids),
+                        "DELETE FROM memory_vectors "
+                        "WHERE doc_id NOT IN (SELECT doc_id FROM valid_doc_ids)"
                     )
                 else:
                     conn.execute("DELETE FROM memory_vectors")
@@ -2231,17 +2239,16 @@ class FileMemoryStore:
                 return
             with sqlite3.connect(self._graph_db_path) as conn:
                 if valid_ids:
-                    placeholders = ",".join("?" for _ in valid_ids)
+                    # Use temp table to avoid SQLite variable limit (default 999)
+                    conn.execute("CREATE TEMP TABLE valid_memory_ids (memory_id TEXT PRIMARY KEY)")
+                    self._insert_valid_ids_batched(conn, "valid_memory_ids", valid_ids)
                     conn.execute(
-                        f"DELETE FROM memory_entity_links WHERE memory_id NOT IN ({placeholders})",
-                        tuple(valid_ids),
+                        "DELETE FROM memory_entity_links "
+                        "WHERE memory_id NOT IN (SELECT memory_id FROM valid_memory_ids)"
                     )
                     conn.execute(
-                        (
-                            "DELETE FROM relationship_evidence "
-                            f"WHERE memory_id NOT IN ({placeholders})"
-                        ),
-                        tuple(valid_ids),
+                        "DELETE FROM relationship_evidence "
+                        "WHERE memory_id NOT IN (SELECT memory_id FROM valid_memory_ids)"
                     )
                 else:
                     conn.execute("DELETE FROM memory_entity_links")
@@ -2258,6 +2265,23 @@ class FileMemoryStore:
 
         await asyncio.to_thread(_cleanup_vector_sync)
         await asyncio.to_thread(_cleanup_graph_sync)
+
+    @staticmethod
+    def _insert_valid_ids_batched(
+        conn: sqlite3.Connection, table_name: str, valid_ids: list[str], batch_size: int = 500
+    ) -> None:
+        """Insert valid IDs into a temp table in batches to avoid variable limit.
+
+        Args:
+            conn: SQLite connection
+            table_name: Name of temp table to populate
+            valid_ids: List of valid memory/doc IDs
+            batch_size: Maximum IDs per INSERT (stays well under SQLite's 999 limit)
+        """
+        for i in range(0, len(valid_ids), batch_size):
+            batch = valid_ids[i : i + batch_size]
+            placeholders = ",".join("(?)" for _ in batch)
+            conn.execute(f"INSERT INTO {table_name} VALUES {placeholders}", tuple(batch))
 
     def _rewrite_markdown(self, path: Path) -> None:
         """Reconstruct a markdown file from remaining index entries for that file."""
