@@ -450,7 +450,7 @@ class FileMemoryStore:
         self,
         base_path: Path | None = None,
         *,
-        vector_enabled: bool = True,
+        vector_enabled: bool = False,
         vector_store: str = "sqlite-vec",
         embedding_model: str = "nomic-embed-text",
         embedding_provider: str = "ollama",
