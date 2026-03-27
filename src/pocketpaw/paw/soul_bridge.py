@@ -18,21 +18,40 @@ class SoulBootstrapProvider:
 
     Maps the soul's system prompt, personality, and memories into
     the BootstrapContext fields that AgentContextBuilder consumes.
+    Preserves instructions (tool docs) and user profile from the
+    default provider so the agent retains all its capabilities.
     """
 
     def __init__(self, soul: Soul) -> None:
         self._soul = soul
+        # Load instructions and user profile from default provider once
+        from pocketpaw.bootstrap.default_provider import DefaultBootstrapProvider
+
+        self._default = DefaultBootstrapProvider()
 
     async def get_context(self) -> BootstrapContext:
-        """Build BootstrapContext from the soul's current state."""
+        """Build BootstrapContext from the soul's current state.
+
+        Identity, soul, and style come from the Soul instance.
+        Instructions and user_profile come from the default provider
+        (INSTRUCTIONS.md, USER.md) so tool docs and user context are preserved.
+        """
         soul = self._soul
+
+        # Load default context for instructions + user_profile
+        default_ctx = await self._default.get_context()
+
         system_prompt = soul.to_system_prompt()
 
-        # Extract personality and mood for style hints
+        # Extract personality, mood, and biorhythm for style hints
         state = soul.state
         mood_hint = f"Current mood: {state.mood}" if hasattr(state, "mood") else ""
         energy_hint = f"Energy: {state.energy}" if hasattr(state, "energy") else ""
-        style_parts = [s for s in [mood_hint, energy_hint] if s]
+        tired_hint = ""
+        if hasattr(state, "energy") and hasattr(state, "tired_threshold"):
+            if state.energy <= state.tired_threshold:
+                tired_hint = "Status: fatigued (low energy)"
+        style_parts = [s for s in [mood_hint, energy_hint, tired_hint] if s]
 
         # Pull active self-images for knowledge context
         knowledge: list[str] = []
@@ -49,7 +68,9 @@ class SoulBootstrapProvider:
             identity=system_prompt,
             soul="I am a persistent AI companion powered by soul-protocol.",
             style="; ".join(style_parts) if style_parts else "Helpful and attentive.",
+            instructions=default_ctx.instructions,
             knowledge=knowledge,
+            user_profile=default_ctx.user_profile,
         )
 
 

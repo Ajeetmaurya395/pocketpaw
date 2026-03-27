@@ -11,6 +11,7 @@ from pocketpaw.agents.loop import AgentLoop
 from pocketpaw.bus.adapters.websocket_adapter import WebSocketAdapter
 from pocketpaw.bus.commands import get_command_handler as _get_cmd_handler
 from pocketpaw.config import Settings
+from pocketpaw.status import StatusTracker
 
 try:
     from fastapi import WebSocket
@@ -22,6 +23,7 @@ except ImportError:
 
 ws_adapter = WebSocketAdapter()
 agent_loop = AgentLoop()
+status_tracker = StatusTracker()
 
 # Wire up the agent loop so /kill can cancel in-flight sessions
 _get_cmd_handler().set_agent_loop(agent_loop)
@@ -57,6 +59,8 @@ _CHANNEL_CONFIG_KEYS: dict[str, dict[str, str]] = {
         "allowed_user_ids": "discord_allowed_user_ids",
         "allowed_channel_ids": "discord_allowed_channel_ids",
         "conversation_channel_ids": "discord_conversation_channel_ids",
+        "conversation_all_channels": "discord_conversation_all_channels",
+        "conversation_exclude_channel_ids": "discord_conversation_exclude_channel_ids",
         "bot_name": "discord_bot_name",
         "status_type": "discord_status_type",
         "activity_type": "discord_activity_type",
@@ -121,7 +125,7 @@ _CHANNEL_REQUIRED: dict[str, list[str]] = {
 
 # Maps channel name → (import_module, display_package, pip_spec)
 _CHANNEL_DEPS: dict[str, tuple[str, str, str]] = {
-    "discord": ("discord.ext.commands", "discord.py", "pocketpaw[discord]"),
+    "discord": ("discli", "discord-cli-agent", "pocketpaw[discord]"),
     "slack": ("slack_bolt", "slack-bolt", "pocketpaw[slack]"),
     "whatsapp": ("neonize", "neonize", "pocketpaw[whatsapp-personal]"),
     "telegram": ("telegram.ext", "python-telegram-bot", "pocketpaw[telegram]"),

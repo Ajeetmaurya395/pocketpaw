@@ -58,6 +58,7 @@ function app() {
             { id: 'memory', label: 'Memory', icon: 'database' },
             { id: 'services', label: 'Search & Services', icon: 'search' },
             { id: 'system', label: 'System', icon: 'activity' },
+            { id: 'soul', label: 'Soul', icon: 'sparkles' },
         ],
 
         // Terminal logs
@@ -130,8 +131,22 @@ function app() {
             mem0VectorStore: 'qdrant',
             mem0OllamaBaseUrl: 'http://localhost:11434',
             webHost: '127.0.0.1',
-            webPort: 8888
+            webPort: 8888,
+            a2aEnabled: false,
+            a2aAgentName: 'PocketPaw',
+            a2aAgentDescription: '',
+            a2aTaskTimeout: 120,
+            a2aTrustedAgents: '',
+            soulEnabled: false,
+            soulName: 'Paw',
+            soulArchetype: 'The Helpful Assistant',
+            soulPersona: '',
+            soulAutoSaveInterval: 300,
         },
+
+        // Soul import state
+        soulImportStatus: '',
+        soulImportError: false,
 
         // API Keys (not persisted client-side, but we track if saved on server)
         apiKeys: {
@@ -484,10 +499,15 @@ function app() {
             // Data-driven settings sync: map server keys to local settings
             const SETTINGS_MAP = [
                 'agentBackend', 'claudeSdkProvider', 'claudeSdkModel', 'claudeSdkMaxTurns',
-                'openaiAgentsProvider',
+                'openaiAgentsProvider', 'openaiAgentsModel', 'openaiAgentsMaxTurns',
+                'googleAdkProvider', 'googleAdkModel', 'googleAdkMaxTurns',
+                'codexCliModel', 'codexCliMaxTurns',
+                'copilotSdkProvider', 'copilotSdkModel', 'copilotSdkMaxTurns',
+                'deepAgentsModel', 'deepAgentsMaxTurns',
+                'opencodeBaseUrl', 'opencodeModel', 'opencodeMaxTurns',
                 'llmProvider', 'ollamaHost', 'ollamaModel', 'anthropicModel',
                 'openaiCompatibleBaseUrl', 'openaiCompatibleModel', 'openaiCompatibleMaxTokens',
-                'geminiModel',
+                'geminiModel', 'litellmApiBase', 'litellmModel', 'litellmMaxTokens',
                 'bypassPermissions', 'webSearchProvider', 'urlExtractProvider',
                 'injectionScanEnabled', 'injectionScanLlm',
                 'piiScanEnabled', 'piiDefaultAction', 'piiScanMemory', 'piiScanAudit', 'piiScanLogs',
@@ -500,16 +520,21 @@ function app() {
                 'memoryBackend', 'mem0AutoLearn', 'mem0LlmProvider',
                 'mem0LlmModel', 'mem0EmbedderProvider', 'mem0EmbedderModel',
                 'mem0VectorStore', 'mem0OllamaBaseUrl',
-                'webHost', 'webPort'
+                'webHost', 'webPort',
+                'a2aEnabled', 'a2aAgentName', 'a2aAgentDescription', 'a2aTaskTimeout'
             ];
             for (const key of SETTINGS_MAP) {
                 if (s[key] !== undefined) this.settings[key] = s[key];
+            }
+            // Trusted agents list: server sends array, UI uses newline-separated string
+            if (Array.isArray(s.a2aTrustedAgents)) {
+                this.settings.a2aTrustedAgents = s.a2aTrustedAgents.join('\n');
             }
 
             // API key availability flags
             const KEY_FLAGS = {
                 hasAnthropicKey: false, hasOpenaiKey: false, hasOpenaiCompatibleKey: false,
-                hasGoogleApiKey: false,
+                hasLitellmKey: false, hasGoogleApiKey: false,
                 hasTavilyKey: false, hasBraveKey: false,
                 hasParallelKey: false, hasElevenlabsKey: false,
                 hasGoogleOAuthId: false, hasGoogleOAuthSecret: false,
@@ -592,6 +617,68 @@ function app() {
          */
         saveSettings() {
             socket.saveSettings(this.settings);
+        },
+
+        /**
+         * Import a soul from an uploaded file (.soul, .yaml, .yml, .json)
+         */
+        async importSoulFile(event) {
+            const file = event.target.files?.[0];
+            if (!file) return;
+
+            this.soulImportStatus = 'Importing...';
+            this.soulImportError = false;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const resp = await fetch('/api/v1/soul/import', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const data = await resp.json();
+                if (data.error) {
+                    this.soulImportStatus = data.error;
+                    this.soulImportError = true;
+                } else {
+                    this.soulImportStatus = `Imported "${data.name}" successfully`;
+                    this.soulImportError = false;
+                    // Update the soul name in settings to reflect the imported soul
+                    if (data.name) {
+                        this.settings.soulName = data.name;
+                    }
+                }
+            } catch (err) {
+                this.soulImportStatus = `Import failed: ${err.message}`;
+                this.soulImportError = true;
+            }
+
+            // Clear the file input so the same file can be re-selected
+            event.target.value = '';
+        },
+
+        /**
+         * Export the current soul to a .soul file
+         */
+        async exportSoulFile() {
+            this.soulImportStatus = 'Exporting...';
+            this.soulImportError = false;
+
+            try {
+                const resp = await fetch('/api/v1/soul/export', { method: 'POST' });
+                const data = await resp.json();
+                if (data.error) {
+                    this.soulImportStatus = data.error;
+                    this.soulImportError = true;
+                } else {
+                    this.soulImportStatus = `Exported to ${data.path}`;
+                    this.soulImportError = false;
+                }
+            } catch (err) {
+                this.soulImportStatus = `Export failed: ${err.message}`;
+                this.soulImportError = true;
+            }
         },
 
         /**
@@ -812,6 +899,7 @@ function app() {
             else if (backend === 'codex_cli') provider = 'openai';
             else if (backend === 'opencode') return false;
             else if (backend === 'copilot_sdk') return false;
+            else if (backend === 'deep_agents') return false;
 
             // Ollama and openai_compatible don't need top-level API keys
             if (provider === 'ollama' || provider === 'openai_compatible') return false;
@@ -836,7 +924,7 @@ function app() {
             else if (backend === 'openai_agents') provider = this.settings.openaiAgentsProvider || 'openai';
             else if (backend === 'google_adk') provider = 'google';
             else if (backend === 'codex_cli') provider = 'openai';
-            else return false; // opencode, copilot_sdk don't need keys
+            else return false; // opencode, copilot_sdk, deep_agents don't need keys
 
             if (provider === 'ollama' || provider === 'openai_compatible') return false;
 
@@ -885,6 +973,11 @@ function app() {
             { section: 'services', sectionLabel: 'Search & Services', label: 'TTS Provider', hint: 'voice openai elevenlabs sarvam' },
             { section: 'services', sectionLabel: 'Search & Services', label: 'OCR Provider', hint: 'vision tesseract' },
             { section: 'system', sectionLabel: 'System', label: 'Self-Audit Daemon', hint: 'audit schedule' },
+            { section: 'system', sectionLabel: 'System', label: 'A2A Protocol', hint: 'a2a agent delegation task multi-agent interop' },
+            { section: 'soul', sectionLabel: 'Soul', label: 'Enable Soul Protocol', hint: 'soul identity personality memory emotion' },
+            { section: 'soul', sectionLabel: 'Soul', label: 'Soul Name', hint: 'soul name identity' },
+            { section: 'soul', sectionLabel: 'Soul', label: 'Archetype', hint: 'soul archetype personality role' },
+            { section: 'soul', sectionLabel: 'Soul', label: 'Auto-Save Interval', hint: 'soul save persist crash' },
         ],
 
         searchSettings() {

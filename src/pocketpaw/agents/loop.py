@@ -11,6 +11,8 @@ import asyncio
 import logging
 import re
 import time
+from pathlib import Path
+from typing import Any
 
 from pocketpaw.agents.router import AgentRouter
 from pocketpaw.bootstrap import AgentContextBuilder
@@ -56,6 +58,24 @@ def _extract_generated_paths(text: str) -> list[str]:
     return _GENERATED_PATH_RE.findall(text)
 
 
+# Strip markdown links to generated audio files that the LLM may insert after calling tts tool.
+_AUDIO_LINK_RE = re.compile(
+    r"\[(?:[^\]]*?)\]\([^)]*generated[/\\]audio[/\\][^)]*\)\n?",
+    re.IGNORECASE,
+)
+
+# Audio file extensions for voice message detection
+_AUDIO_EXTS = {".ogg", ".oga", ".mp3", ".wav", ".m4a", ".opus", ".aac", ".flac"}
+
+
+def _strip_tts_links(text: str) -> str:
+    """Remove generated-audio markdown links and bare media tags from LLM text output."""
+    text = _AUDIO_LINK_RE.sub("", text)
+    text = re.sub(r"<!-- media:[^>]+-->", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 class AgentLoop:
     """
     Main agent execution loop.
@@ -86,6 +106,9 @@ class AgentLoop:
         self._background_tasks: set[asyncio.Task] = set()
         self._active_tasks: dict[str, asyncio.Task] = {}  # session_key -> processing task
 
+        # Soul Protocol (optional)
+        self._soul_manager: Any = None  # SoulManager | None
+
         self._running = False
 
     def _get_router(self) -> AgentRouter:
@@ -101,6 +124,21 @@ class AgentLoop:
         self._running = True
         settings = Settings.load()
         logger.info(f"🤖 Agent Loop started (Backend: {settings.agent_backend})")
+
+        # Initialize Soul if enabled
+        if settings.soul_enabled:
+            try:
+                from pocketpaw.soul.manager import SoulManager
+
+                self._soul_manager = SoulManager(settings)
+                await self._soul_manager.initialize()
+                if self._soul_manager.bootstrap_provider:
+                    self.context_builder.bootstrap = self._soul_manager.bootstrap_provider
+                self._soul_manager.start_auto_save()
+            except Exception:
+                logger.exception("Soul initialization failed, continuing without soul")
+                self._soul_manager = None
+
         # Spawn the session-lock GC before entering the main loop so it begins
         # pruning stale locks as soon as the server is live.
         self._lock_gc_task = asyncio.create_task(self._gc_session_locks(), name="session-lock-gc")
@@ -117,6 +155,12 @@ class AgentLoop:
             except asyncio.CancelledError:
                 pass  # expected on clean shutdown
             self._lock_gc_task = None
+        # Persist soul state and stop auto-save
+        if self._soul_manager is not None:
+            try:
+                await self._soul_manager.shutdown()
+            except Exception:
+                logger.exception("Failed to shut down soul")
         logger.info("🛑 Agent Loop stopped")
 
     async def _gc_session_locks(self) -> None:
@@ -226,7 +270,9 @@ class AgentLoop:
                         )
                     )
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Failed to write audit log for /kill action",
+                    )
 
                 await self.bus.publish_outbound(
                     OutboundMessage(
@@ -298,7 +344,7 @@ class AgentLoop:
             logger.info("Processing cancelled for session %s", session_key)
             raise
 
-    _WELCOME_EXCLUDED = frozenset({Channel.WEBSOCKET, Channel.CLI, Channel.SYSTEM})
+    _WELCOME_EXCLUDED = frozenset({Channel.WEBSOCKET, Channel.CLI, Channel.SYSTEM, Channel.DISCORD})
 
     async def _process_message_inner(self, message: InboundMessage, session_key: str) -> None:
         """Inner message processing (called under concurrency guards)."""
@@ -340,6 +386,7 @@ class AgentLoop:
                 )
 
         router = None
+        agent_started = False
         try:
             # 0. Injection scan for non-owner sources
             content = message.content
@@ -405,6 +452,10 @@ class AgentLoop:
             )
 
             # 1b. Inject inbound media file paths so the agent can use them
+            # Also detect whether this is a voice message so we can auto-TTS the reply.
+            is_voice_message = any(
+                Path(p).suffix.lower() in _AUDIO_EXTS for p in (message.media or [])
+            )
             if message.media:
                 paths_info = ", ".join(message.media)
                 content += f"\n[Media files on disk: {paths_info}]"
@@ -428,6 +479,7 @@ class AgentLoop:
                     session_key=message.session_key,
                     file_context=file_context,
                     agents_md_dir=agents_md_dir,
+                    metadata=message.metadata,
                 ),
                 self.memory.get_compacted_history(
                     session_key,
@@ -455,7 +507,10 @@ class AgentLoop:
                         )
                     )
             except Exception:
-                pass  # Never let AGENTS.md discovery break the processing pipeline
+                logger.debug(
+                    "AGENTS.md discovery failed (continuing)",
+                    exc_info=True,
+                )
 
             # 2b. Emit thinking event
             # 2b. Periodic identity reinforcement for long conversations.
@@ -472,7 +527,11 @@ class AgentLoop:
                     "</identity-reminder>"
                 )
 
-            # 2c. Emit thinking event
+            # 2c. Emit agent_start + thinking events
+            agent_started = True
+            await self.bus.publish_system(
+                SystemEvent(event_type="agent_start", data={"session_key": session_key})
+            )
             await self.bus.publish_system(
                 SystemEvent(event_type="thinking", data={"session_key": session_key})
             )
@@ -552,7 +611,10 @@ class AgentLoop:
                                 total_cost_usd=meta.get("total_cost_usd"),
                             )
                         except Exception:
-                            pass
+                            logger.debug(
+                                "Failed to persist token usage metrics",
+                                exc_info=True,
+                            )
 
                     elif etype == "tool_use":
                         tool_name = meta.get("name") or meta.get("tool", "unknown")
@@ -574,7 +636,11 @@ class AgentLoop:
                                 tool_name, tool_input if isinstance(tool_input, dict) else {}
                             )
                         except Exception:
-                            pass
+                            logger.debug(
+                                "Failed to record recent file tracker event for tool '%s'",
+                                tool_name,
+                                exc_info=True,
+                            )
 
                         # AskUserQuestion — forward the question to the
                         # client so the user can see and answer it.
@@ -646,9 +712,35 @@ class AgentLoop:
             if not media_paths and full_response:
                 media_paths.extend(_extract_generated_paths(full_response))
 
+            # 4b. Auto-TTS: if the inbound message was a voice note and the agent
+            # didn't already call text_to_speech (no audio in media_paths), synthesize
+            # the full response as a voice reply now.
+            already_has_audio = any(Path(p).suffix.lower() in _AUDIO_EXTS for p in media_paths)
+            voice_media_paths: list[str] = []
+            if (
+                is_voice_message
+                and not already_has_audio
+                and not cancelled
+                and full_response
+                and self.settings.voice_reply_enabled
+            ):
+                try:
+                    from pocketpaw.tools.builtin.voice import synthesize_speech
+
+                    tts_path = await synthesize_speech(full_response)
+                    if tts_path:
+                        logger.info("Auto-TTS voice reply: %s", tts_path)
+                        media_paths.append(tts_path)
+                        voice_media_paths.append(tts_path)
+                except Exception as _tts_err:
+                    logger.warning("Auto-TTS failed: %s", _tts_err)
+
             # Deduplicate while preserving order
             seen: set[str] = set()
             media_paths = [p for p in media_paths if not (p in seen or seen.add(p))]
+            metadata_out: dict[str, Any] = {}
+            if voice_media_paths:
+                metadata_out["voice_media_paths"] = voice_media_paths
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=message.channel,
@@ -656,10 +748,14 @@ class AgentLoop:
                     content="",
                     is_stream_end=True,
                     media=media_paths,
+                    metadata=metadata_out,
                 )
             )
 
             # 5. Store assistant response in memory
+            # Strip TTS links from full_response before storing (keep memory clean)
+            if full_response:
+                full_response = _strip_tts_links(full_response)
             if cancelled and full_response:
                 full_response += "\n\n[Response interrupted]"
             if full_response:
@@ -675,10 +771,18 @@ class AgentLoop:
                 )
 
                 # 6. Auto-learn: extract facts from conversation (non-blocking)
-                # Skip auto-learn on cancelled responses — partial data is unreliable
-                should_auto_learn = not cancelled and (
-                    (self.settings.memory_backend == "mem0" and self.settings.mem0_auto_learn)
-                    or (self.settings.memory_backend == "file" and self.settings.file_auto_learn)
+                # Skip auto-learn on cancelled responses — partial data is unreliable.
+                # Also skip when soul is active — soul.observe() + reflect() handles
+                # fact extraction and memory consolidation, so auto_learn would duplicate.
+                should_auto_learn = (
+                    not cancelled
+                    and self._soul_manager is None
+                    and (
+                        (self.settings.memory_backend == "mem0" and self.settings.mem0_auto_learn)
+                        or (
+                            self.settings.memory_backend == "file" and self.settings.file_auto_learn
+                        )
+                    )
                 )
                 if should_auto_learn:
                     t = asyncio.create_task(
@@ -691,6 +795,20 @@ class AgentLoop:
                     )
                     self._background_tasks.add(t)
                     t.add_done_callback(self._background_tasks.discard)
+
+                # Soul observation: feed turn for personality/memory evolution
+                if self._soul_manager is not None and not cancelled:
+                    t = asyncio.create_task(
+                        self._soul_observe_and_emit(message.content, full_response, session_key)
+                    )
+                    self._background_tasks.add(t)
+                    t.add_done_callback(self._background_tasks.discard)
+
+            # Signal agent processing complete
+            if agent_started:
+                await self.bus.publish_system(
+                    SystemEvent(event_type="agent_end", data={"session_key": session_key})
+                )
 
         except Exception as e:
             logger.exception(f"❌ Error processing message: {e}")
@@ -708,13 +826,19 @@ class AgentLoop:
                     context={"session_key": session_key},
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to persist processing error in health engine",
+                    exc_info=True,
+                )
             # Kill the backend on error
             if router is not None:
                 try:
                     await router.stop()
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Failed to stop router cleanly after processing error",
+                        exc_info=True,
+                    )
 
             # Apply output redaction to exception messages
             error_msg = redact_output(f"An error occurred: {str(e)}")
@@ -733,6 +857,11 @@ class AgentLoop:
                     is_stream_end=True,
                 )
             )
+            # Signal agent processing complete even on error
+            if agent_started:
+                await self.bus.publish_system(
+                    SystemEvent(event_type="agent_end", data={"session_key": session_key})
+                )
 
     async def _send_response(self, original: InboundMessage, content: str) -> None:
         """Helper to send a simple text response."""
@@ -764,6 +893,80 @@ class AgentLoop:
         except Exception:
             logger.debug("Auto-learn background task failed", exc_info=True)
 
+    async def _soul_observe_and_emit(
+        self, user_input: str, agent_output: str, session_key: str
+    ) -> None:
+        """Observe interaction, run self-evaluation, and emit soul state event."""
+        if self._soul_manager is None or not self._soul_manager._initialized:
+            return
+        try:
+            await self._soul_manager.observe(user_input, agent_output)
+            soul = self._soul_manager.soul
+            if soul is not None:
+                state = soul.state
+                event_data: dict[str, Any] = {
+                    "mood": getattr(state, "mood", None),
+                    "energy": getattr(state, "energy", None),
+                    "session_key": session_key,
+                }
+
+                # v0.2.4+: Run rubric self-evaluation (non-blocking)
+                eval_result = await self._soul_manager.evaluate(user_input, agent_output)
+                if eval_result is not None:
+                    event_data["evaluation"] = eval_result
+
+                await self.bus.publish_system(
+                    SystemEvent(
+                        event_type="soul_state",
+                        data=event_data,
+                    )
+                )
+        except Exception:
+            logger.debug("Soul observation failed (non-fatal)", exc_info=True)
+
     def reset_router(self) -> None:
         """Reset the router to pick up new settings."""
         self._router = None
+
+        # Handle soul_enabled toggle at runtime
+        settings = Settings.load()
+        if settings.soul_enabled and self._soul_manager is None:
+            try:
+                from pocketpaw.soul.manager import SoulManager
+
+                self._soul_manager = SoulManager(settings)
+                asyncio.create_task(self._initialize_soul_runtime())
+            except Exception:
+                logger.debug("Soul runtime init failed", exc_info=True)
+        elif not settings.soul_enabled and self._soul_manager is not None:
+            if self._soul_manager._initialized:
+                asyncio.create_task(self._teardown_soul_runtime())
+            else:
+                # Not yet initialized, just discard the reference
+                self._soul_manager = None
+
+    async def _initialize_soul_runtime(self) -> None:
+        """Initialize soul when enabled at runtime."""
+        if self._soul_manager is None:
+            return
+        try:
+            await self._soul_manager.initialize()
+            if self._soul_manager.bootstrap_provider:
+                self.context_builder.bootstrap = self._soul_manager.bootstrap_provider
+            self._soul_manager.start_auto_save()
+        except Exception:
+            logger.exception("Soul runtime initialization failed")
+            self._soul_manager = None
+
+    async def _teardown_soul_runtime(self) -> None:
+        """Tear down soul when disabled at runtime."""
+        if self._soul_manager is None:
+            return
+        try:
+            await self._soul_manager.shutdown()
+        except Exception:
+            logger.debug("Soul runtime teardown failed", exc_info=True)
+        self._soul_manager = None
+        from pocketpaw.bootstrap.default_provider import DefaultBootstrapProvider
+
+        self.context_builder.bootstrap = DefaultBootstrapProvider()
