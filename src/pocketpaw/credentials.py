@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import platform
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -121,13 +122,14 @@ class CredentialStore:
         """Extract macOS hardware UUID or fallback to system identifier."""
         import subprocess
 
-        # If we're obviously in a CI environment, use a stable constant
+        # 1. Use stable constant for CI/GitHub Actions
         if os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true":
             return "CI_ENVIRONMENT_ID"
 
-        if platform.system() != "Darwin":
-            # Fallback for non-macOS: use platform.node() as a surrogate "uuid"
-            return platform.node()
+        # 2. Only attempt ioreg on macOS
+        if sys.platform != "darwin":
+            # Fallback for Linux or Windows: use platform.node()
+            return f"FALLBACK-{platform.node()}"
 
         try:
             # Command to extract the Hardware UUID on macOS (safer version without shell=True)
@@ -140,9 +142,9 @@ class CredentialStore:
                     parts = line.split("=")
                     if len(parts) > 1:
                         return parts[1].strip().strip('"')
-            return platform.node()
+            return f"DEFAULT-{platform.node()}"
         except (subprocess.SubprocessError, OSError, Exception):
-            return platform.node()  # Last resort fallback
+            return f"DEFAULT-{platform.node()}"  # Last resort fallback
 
     def _get_machine_identity(self) -> bytes:
         """Build a machine-bound identity string."""
